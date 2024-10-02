@@ -35,17 +35,31 @@ Data and Input shapes:
     - Result after application of mm1, A*mm1^T == (S, 1, H//12) == (d1, 1, d2//12)
     - Result after application of mm2, A*mm1^T*mm2^T == (S, 1, H) == (d1, 1, d2)
 """
-print("being import", flush=True)
+#print("being import", flush=True)
 from mpi4py import MPI
 import os
 import time
 import socket
+import argparse
 
 import torch
 
 import intel_extension_for_pytorch as ipex  # noqa: F401 # type: ignore
 import oneccl_bindings_for_pytorch  # noqa: F401 # type: ignore
-print("being code", flush=True)
+#print("being code", flush=True)
+
+parser = argparse.ArgumentParser(description="parse input arguments for sequence parallel partial benchmark")
+
+parser.add_argument("-s", "--sequence_length", 
+                    help="Maximum sequence length. The size of the ALLGATHER buffer", 
+                    type=int, default=4608)
+parser.add_argument("-it", "--iterations", 
+                    help="number of iterations for the timing loop", 
+                    type=int, default=18)
+parser.add_argument("-wit", "--warmup_iterations", help="number of warmup iterations", 
+                    type=int, default=10)
+
+args = parser.parse_args()
 
 rank = int(MPI.COMM_WORLD.Get_rank())
 world_size = int(MPI.COMM_WORLD.Get_size())
@@ -81,10 +95,11 @@ torch.distributed.init_process_group(
     world_size=world_size,
     rank=rank,
 )
-d1 = 4608 #4608 sequence length
+d1 = args.sequence_length #4608 #4608 sequence length
 d2 = 9216 #9216 hidden dimension
 all_gather_buffer = torch.zeros([d1, 1, d2], dtype=torch.bfloat16, device=f"xpu:{torch.xpu.current_device()}")
 input = torch.rand([d1//world_size, 1, d2], dtype=torch.bfloat16, device=f"xpu:{torch.xpu.current_device()}")
+#print(f"Input shape = {input.shape}")
 mm1 = torch.rand(
         d2//world_size,
         d2,
@@ -98,8 +113,9 @@ mm2 = torch.rand(
         dtype=torch.bfloat16,
     )*1e-3
 #warmup
-print("in_mean0", input.mean())
-for i in range(10):
+input_mean_before_operations=input.mean()
+#print("in_mean0", input.mean())
+for i in range(args.warmup_iterations):
     torch.distributed.all_gather_into_tensor(
         all_gather_buffer, input
     )
@@ -110,13 +126,17 @@ for i in range(10):
         input, intermediate
     )
 print("start loop", flush=True)
-print("in_mean1", input.mean())
+#print("in_mean1", input.mean())
 time0 = 0.0
 time1 = 0.0
 time2 = 0.0
 time3 = 0.0
+
+list_all_gather_times = []
+list_reduce_scatter_times = []
+
 start_time=time.time()
-for i in range(18):
+for i in range(args.iterations):
     start = time.time()
     torch.distributed.all_gather_into_tensor(
         all_gather_buffer, input
@@ -124,6 +144,7 @@ for i in range(18):
     torch.xpu.synchronize()
     end = time.time()
     time0 += end-start
+    list_all_gather_times.append(end-start)
     start = end
 
     intermediate = torch.matmul(all_gather_buffer, mm1.t())
@@ -143,11 +164,22 @@ for i in range(18):
     torch.xpu.synchronize()
     end = time.time()
     time3 += end-start
+    list_reduce_scatter_times.append(end-start)
     #gather optimizer states
     #allreduce model updates
 end_time=time.time()
 torch.xpu.synchronize()
 if rank == 0:
     print("times", time0*1000, time1*1000, time2*1000, time3*1000)
+    print(f"Mean before all operations = {input_mean_before_operations}")
+    print(f"Total time taken for ALLGATHER = {time0*1000} ms" )
+    print(f"Total time taken for matrix multiplication 1 = {time1*1000} ms")
+    print(f"Total time taken for matrix multiplication 2 = {time2*1000} ms")
+    print(f"Total time taken for REDUCE_SCATTER = {time3*1000} ms")
     print("total time for the loop", (end_time-start_time)*1000)
-    print("in_mean2", input.mean())
+    print("Mean after all operations = ", input.mean())
+    print(f"ALLGATHER Bandwidth = {(args.sequence_length * 16 * args.iterations) / (time0 * 1000 * 1000) / 1024 / 1024 / 1024} Gbit/s")
+    print(f"REDUCE_SCATTER Bandwidth = {(args.sequence_length * 16 * args.iterations) / (time3 * 1000 * 1000) / 1024 / 1024 / 1024} Gbit/s")
+
+    for idx, (t_ag, t_rs) in enumerate(zip(list_all_gather_times, list_reduce_scatter_times)):
+        print(f"ALLGATHER {idx} takes {t_ag*1000} ms, REDUCE_SCATTER {idx} takes {t_rs*1000} ms")
