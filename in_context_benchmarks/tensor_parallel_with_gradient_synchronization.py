@@ -39,6 +39,8 @@ parser.add_argument("-sp_switch", "--sequence_parallel_switch", help="Switch seq
 
 parser.add_argument("-n_layers", "--number_of_transformer_layers", help="Number of transformer layers", type=int, default=80)
 
+parser.add_argument("-n_timing_loops", "--number_of_timing_loops", help="Number of timing loops", type=int, default=2)
+
 
 #parser.add_argument("-dp_degree", "--data_parallel_degree", help="Data Parallel degree. In this context, the data (tokens etc.) is distributed across the number of (data parallel degree)) ranks",
 #                    type=int, default=6)
@@ -257,166 +259,215 @@ if rank==0:
 timem1 = 0.0
 # Total time for the first all_gather, to collect parallelized sequences
 time0 = 0.0
-# Individual times for the first all_gather for SP in the timing loop
+# Individual times for the first all_gather for SP in the transformer loop
 T0 = []
+# Total times from the timing loops for the first all_gather for SP in the transformer loop
+T0_timing_loop = []
 # Total time for the first column parallel Attention (Q,K,V) multiplication
 time1 = 0.0
 # Individual times for the column parallel Attention matrix multiplication
 T1 = []
+# Total times from the timing loops for the first column parallel Attention matrix multiplication in the transformer loop
+T1_timing_loop = []
 # Total time for the row parallel Attention matrix multiplication
 time2 = 0.0
 # Individual times for the row parallel Attention matrix multiplication
 T2 = []
+# Total times from the timing loops for the first row parallel Attention matrix multiplication in the transformer loop
+T2_timing_loop = []
 # Total time for the first reduce scatter for SP
 time3 = 0.0
 # Individual times for the first reduce scatter
 T3 = []
+# Total times from the timing loops for the first reduce scatter in the transformer loop
+T3_timing_loop=[]
 # Total time for the first Allreduce for TP
 time4 = 0.0
 # Individual times for the first Allreduce
 T4 = []
+# Total times from the timing loops for the first Allreduce in the transformer loop
+T4_timing_loop=[]
 # Total time for the second allgather, after the attention layer
 time5 = 0.0
 # Individual times for the second allgather
 T5 = []
+# Total times from the timing loops for the second Allgather in the transformer loop
+T5_timing_loop=[]
 # Total time for the Hidden representation H --> 4H
 time6 = 0.0
 # Individual times for H --> 4H
 T6 = []
+# Total times from the timing loops for the Hidden representation H --> 4H in the transformer loop
+T6_timing_loop=[]
 # Total time for the Hidden representation 4H --> H
 time7 = 0.0
 # Individual times for 4H --> H
 T7 = []
+# Total times from the timing loops for the Hidden representation 4H --> H in the transformer loop
+T7_timing_loop=[]
 # Total time for second reduce scatter
 time8 = 0.0
 # Individual times for second reduce scatter
 T8 = []
+# Total times from the timing loops for the second reduce scatter in the transformer loop
+T8_timing_loop=[]
 # Total time for the second Allreduce
 time9 = 0.0
 # Individual times for the second Allreduce
 T9 = []
+# Total times from the timing loops for the second Allreduce in the transformer loop
+T9_timing_loop=[]
 
-start_time=time.time()
+total_timing_loop_times=[]
+timing_loop_time=0.0
+
+timing_loop_start_time=time.time()
 torch.xpu.synchronize()
-N = 1 ## For the full timing loop, not implemented yet
-for i in range(n_layers): 
-    start = time.time()
-    #torch.distributed.all_gather_into_tensor(
-    #    allgather_res, allgather_grad
-    #)
-    if SP:
-        torch.distributed.all_gather_into_tensor(
-            input, partial_input, group=tp_group
-        )
-        #print(f"Inside the first SP call, Input shape is = {input.shape}")
-        torch.xpu.synchronize()
-        end = time.time()
-        T0.append(end-start)
-        time0 += end - start
-    #print(f"Outside the first SP call, Input shape is = {input.shape}")
-    start = time.time()
-    interim1 = torch.matmul(input, mm1.t())
-    torch.xpu.synchronize()
-    end = time.time()
-    T1.append(end - start)
-    time1 += end-start
-
-    start = end
-    interim2 = torch.matmul(interim1, mm2.t())
-    torch.xpu.synchronize()
-    end = time.time()
-    T2.append(end-start)
-    time2 += end-start
-
-    start = time.time()
-    #start = end
-    #torch.distributed.all_gather_into_tensor(
-    #    allgather_res, allgather_grad
-    #)
-    if SP:
-        torch.distributed.reduce_scatter_tensor(
-        partial_interim2, interim2, group=tp_group
-        )
-        torch.xpu.synchronize()
-        end = time.time()
-        T3.append(end-start)
-        time3 += end-start
-    else:
+N_timing_loop = args.number_of_timing_loops ## For the full timing loop, not implemented yet
+for m in range(N_timing_loop):
+    for i in range(n_layers): 
         start = time.time()
-        #print("Doing ALLREDUCE now")
+        #torch.distributed.all_gather_into_tensor(
+        #    allgather_res, allgather_grad
+        #)
+        if SP:
+            torch.distributed.all_gather_into_tensor(
+                input, partial_input, group=tp_group
+            )
+            #print(f"Inside the first SP call, Input shape is = {input.shape}")
+            torch.xpu.synchronize()
+            end = time.time()
+            T0.append(end-start)
+            time0 += end - start
+            #print(f"time0 = {time0 * 1000}")
+        #print(f"Outside the first SP call, Input shape is = {input.shape}")
+        start = time.time()
+        interim1 = torch.matmul(input, mm1.t())
+        torch.xpu.synchronize()
+        end = time.time()
+        T1.append(end - start)
+        time1 += end-start
+
+        start = end
+        interim2 = torch.matmul(interim1, mm2.t())
+        torch.xpu.synchronize()
+        end = time.time()
+        T2.append(end-start)
+        time2 += end-start
+
+        start = time.time()
+        #start = end
+        #torch.distributed.all_gather_into_tensor(
+        #    allgather_res, allgather_grad
+        #)
+        if SP:
+            torch.distributed.reduce_scatter_tensor(
+            partial_interim2, interim2, group=tp_group
+            )
+            torch.xpu.synchronize()
+            end = time.time()
+            T3.append(end-start)
+            time3 += end-start
+        else:
+            start = time.time()
+            #print("Doing ALLREDUCE now")
+            torch.distributed.all_reduce(
+                interim2, group=tp_group
+            )
+            torch.xpu.synchronize()
+            end = time.time()
+            T4.append(end-start)
+            time4 += end-start
+        if SP:
+            start = time.time()
+            torch.distributed.all_gather_into_tensor(
+                interim2, partial_interim2, group=tp_group
+            )
+            torch.xpu.synchronize()
+            end = time.time()
+            T5.append(end-start)
+            time5 += end-start
+        start = time.time()
+        interim3 = torch.matmul(interim2, mm3.t())
+        torch.xpu.synchronize()
+        end = time.time()
+        T6.append(end-start)
+        time6 += end-start
+        
+        start = end
+        interim4 = torch.matmul(interim3, mm4.t())
+        torch.xpu.synchronize()
+        end = time.time()
+        T7.append(end-start)
+        time7 += end-start
+        #
+        if SP:
+            start = time.time()
+            #print("Doing Reduce Scatter Now")
+            torch.distributed.reduce_scatter_tensor(
+                partial_interim4, interim4, group=tp_group
+            )
+            torch.xpu.synchronize()
+            end = time.time()
+            T8.append(end-start)
+            time8 += end-start
+        else:
+            start = time.time()
+            torch.distributed.all_reduce(
+                interim4, group=tp_group
+            )
+            torch.xpu.synchronize()
+            end = time.time()
+            T9.append(end-start)
+            time9 += end-start
+        #time1 += end-start
+    # Total time for grad allreduce over data groups
+    torch.xpu.synchronize()
+    #print(f"time 0 = {time0 * 1000}")
+    #T0_timing_loop.append(time0 * 1000)
+    T0_timing_loop.append(time0 * 1000)
+    T1_timing_loop.append(time1 * 1000)
+    T2_timing_loop.append(time2 * 1000)
+    T3_timing_loop.append(time3 * 1000)
+    T4_timing_loop.append(time4 * 1000)
+    T5_timing_loop.append(time5 * 1000)
+    T6_timing_loop.append(time6 * 1000)
+    T7_timing_loop.append(time7 * 1000)
+    T8_timing_loop.append(time8 * 1000)
+    T9_timing_loop.append(time9 * 1000)
+    time10 = 0.0
+    # Individual times for grad allreduce
+    T10 = []
+    # Total times from the timing loops for the grad Allreduce
+    T10_timing_loop=[]
+    for k in range(n_iter_grad_sync):
+        start = time.time()
         torch.distributed.all_reduce(
-            interim2, group=tp_group
+            allreduce_grad, group=dp_group
         )
         torch.xpu.synchronize()
         end = time.time()
-        T4.append(end-start)
-        time4 += end-start
-    if SP:
-        start = time.time()
-        torch.distributed.all_gather_into_tensor(
-            interim2, partial_interim2, group=tp_group
-        )
-        torch.xpu.synchronize()
-        end = time.time()
-        T5.append(end-start)
-        time5 += end-start
-    start = time.time()
-    interim3 = torch.matmul(interim2, mm3.t())
+        T10.append(end-start)
+        time10 += end-start
+        T10_timing_loop.append(time10 * 1000)
     torch.xpu.synchronize()
-    end = time.time()
-    T6.append(end-start)
-    time6 += end-start
-    
-    start = end
-    interim4 = torch.matmul(interim3, mm4.t())
-    torch.xpu.synchronize()
-    end = time.time()
-    T7.append(end-start)
-    time7 += end-start
-    #
-    if SP:
-        start = time.time()
-        #print("Doing Reduce Scatter Now")
-        torch.distributed.reduce_scatter_tensor(
-            partial_interim4, interim4, group=tp_group
-        )
-        torch.xpu.synchronize()
-        end = time.time()
-        T8.append(end-start)
-        time8 += end-start
-    else:
-        start = time.time()
-        torch.distributed.all_reduce(
-            interim4, group=tp_group
-        )
-        torch.xpu.synchronize()
-        end = time.time()
-        T9.append(end-start)
-        time9 += end-start
-    #time1 += end-start
+    #T0_timing_loop.append(time0 * 1000)
+    #T1_timing_loop.append(time1 * 1000)
+    #T2_timing_loop.append(time2 * 1000)
+    #T3_timing_loop.append(time3 * 1000)
+    #T4_timing_loop.append(time4 * 1000)
+    #T5_timing_loop.append(time5 * 1000)
+    #T6_timing_loop.append(time6 * 1000)
+    #T7_timing_loop.append(time7 * 1000)
+    #T8_timing_loop.append(time8 * 1000)
+    #T9_timing_loop.append(time9 * 1000)
+    #T10_timing_loop.append(time10 * 1000)
+    timing_loop_end_time=time.time()
+    total_timing_loop_times.append((timing_loop_end_time - timing_loop_start_time) * 1000)
+    timing_loop_time += (timing_loop_end_time - timing_loop_start_time)
+    #print(f"time0 = {time0 * 1000} ms")
 
-# Total time for grad allreduce over data groups
-time10 = 0.0
-# Individual times for grad allreduce
-T10 = []
-
-for k in range(n_iter_grad_sync):
-    start = time.time()
-    torch.distributed.all_reduce(
-        allreduce_grad, group=dp_group
-    )
-    torch.xpu.synchronize()
-    end = time.time()
-    T10.append(end-start)
-    time10 += end-start
-end_time=time.time()
-torch.xpu.synchronize()
 if rank == 0:
-    t0 = time0/N
-    t1 = time1/N
-    t2 = time2/N
-    t3 = time3/N
-    tp3 = 0 #(total_bucket_size*16)/(1e9*t3)
     print(f"SP Value = {SP}")
     print(f"Shape of the (Q,K,V) atten. matrix = {mm1.shape}")
     print(f"Shape of the W_0 atten. matrix = {mm2.shape}")
@@ -439,12 +490,17 @@ if rank == 0:
     print(f"Grad Sync Allreduce over DP groups total time = {time10 * 1000} ms")
     print(f"Parameters = {number_of_total_parameters / 1e9} Billions")
     print(f"Number of iterations for gradient sync allreduce = {n_iter_grad_sync}")
-
-
-
-
-
-
-
     #print("First Allgather total time: {} ms\n1: {} ms\n2: {} ms\n3: {} ms {} Gbit/s".format(t0*1000, t1*1000, t2*1000, t3*1000, tp3))
-    print("time2", (end_time-start_time)*1000)
+    print(f"Total time taken for {N_timing_loop} timing loops = {timing_loop_time*1000} ms")
+    print(f"Individual times from the timing loop = {total_timing_loop_times} ms")
+    print(f"First Allgather total times from the timing loop = {T0_timing_loop} ms")
+    print(f"First Column Parallel Attention Matrix multiplication total times from the timing loop = {T1_timing_loop} ms")
+    print(f"First Row Parallel Attention Matrix multiplication total times from the timing loop = {T2_timing_loop} ms")
+    print(f"First Reduce Scatter total times from the timing loop = {T3_timing_loop} ms")
+    print(f"First Allreduce total times from the timing loop = {T4_timing_loop} ms")
+    print(f"Second Allgather total times from the timing loop = {T5_timing_loop} ms")
+    print(f"H --> 4H Matrix multiplication total times from the timing loop = {T6_timing_loop} ms")
+    print(f"4H --> H Matrix multiplication total times from the timing loop = {T7_timing_loop} ms")
+    print(f"Second Reduce Scatter total times from the timing loop = {T8_timing_loop} ms")
+    print(f"Second Allreduce total times from the timing loop = {T9_timing_loop} ms")
+    print(f"Grad Sync Allreduce over DP groups total times from the timing loop = {T10_timing_loop} ms")
