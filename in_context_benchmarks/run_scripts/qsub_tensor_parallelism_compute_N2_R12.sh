@@ -1,5 +1,5 @@
 #!/bin/bash -x
-#PBS -l select=8
+#PBS -l select=2
 #PBS -l place=scatter
 #PBS -l walltime=00:30:00
 #PBS -q lustre_scaling
@@ -24,7 +24,7 @@ echo "$(timestamp): Start of the Run, after exporting TZ Central"
 WORK_DIR=/home/hossainm/ml_communications/in_context_benchmarks
 LOG_WRAPPER=${WORK_DIR}/log_wrapper.sh 
 
-TP_DEGREE=24
+TP_DEGREE=12
 TIMING_LOOPS=6
 TRIAL=1
 
