@@ -1,5 +1,5 @@
 #!/bin/bash -x
-#PBS -l select=4
+#PBS -l select=8
 #PBS -l place=scatter
 #PBS -l walltime=00:30:00
 #PBS -q lustre_scaling
@@ -9,7 +9,7 @@
 #PBS -e /home/hossainm/alcf_4_ai_benchmarks/in_context_benchmarks/run_scripts/errordir
 #PBS -o /home/hossainm/alcf_4_ai_benchmarks/in_context_benchmarks/run_scripts/outdir
 #PBS -j oe
-#PBS -N LLM_test_4x12 
+#PBS -N LLM_test_8x12 
 
 ## Timezone US/Central
 export TZ='/usr/share/zoneinfo/US/Central'
@@ -21,7 +21,12 @@ timestamp() {
 
 echo "$(timestamp): Start of the Run, after exporting TZ Central"
 
-WORK_DIR=/home/hossainm/alcf_4_ai_benchmarks/in_context_benchmarks
+WORK_DIR=/home/hossainm/ml_communications/in_context_benchmarks
+LOG_WRAPPER=${WORK_DIR}/log_wrapper.sh 
+
+TP_DEGREE=24
+TIMING_LOOPS=6
+TRIAL=1
 
 # MPI and OpenMP settings
 NNODES=`wc -l < $PBS_NODEFILE`
@@ -49,9 +54,14 @@ echo "========= CCL VARIABLES =============="
 printenv | grep "CCL"
 echo "========= CCL VARIABLES =============="
 
+RUN_ID=aurora_LLM_Bench_TP${TP_DEGREE}_SP_TIMING_LOOPS${TIMING_LOOPS}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}
+
+echo "${RUN_ID}"
+
 
 echo "$(timestamp): Before mpiexec."
 
-mpiexec --no-vni --pmi=pmix -n ${NRANKS} -ppn ${NRANKS_PER_NODE} -l --line-buffer --cpu-bind ${CPU_AFFINITY} --mem-bind ${MEM_BIND} \
-python ${WORK_DIR}/tensor_parallel_with_gradient_synchronization.py -tp_switch=True -tp_degree=24 -sp_switch=True
+mpiexec --pmi=pmix -n ${NRANKS} -ppn ${NRANKS_PER_NODE} -l --line-buffer --cpu-bind ${CPU_AFFINITY} --mem-bind ${MEM_BIND} \
+${LOG_WRAPPER} python ${WORK_DIR}/tensor_parallel_with_gradient_synchronization.py \
+-tp_degree=${TP_DEGREE} -sp_switch -n_timing_loops=${TIMING_LOOPS}
 
