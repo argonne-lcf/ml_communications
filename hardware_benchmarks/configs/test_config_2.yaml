@@ -1,0 +1,7 @@
+framework:
+    name: pytorch
+    distributor: horovod
+    backend: nccl
+workload:
+    tensor_dim_1d : 4096
+    precision_type : bfloat16
