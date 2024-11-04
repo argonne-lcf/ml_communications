@@ -44,8 +44,8 @@ import argparse
 
 import torch
 
-import intel_extension_for_pytorch as ipex  # noqa: F401 # type: ignore
-import oneccl_bindings_for_pytorch  # noqa: F401 # type: ignore
+#import intel_extension_for_pytorch as ipex  # noqa: F401 # type: ignore
+#import oneccl_bindings_for_pytorch  # noqa: F401 # type: ignore
 #print("being code", flush=True)
 
 parser = argparse.ArgumentParser(description="parse input arguments for sequence parallel partial benchmark")
@@ -64,14 +64,14 @@ args = parser.parse_args()
 rank = int(MPI.COMM_WORLD.Get_rank())
 world_size = int(MPI.COMM_WORLD.Get_size())
 print(f"rank {rank}/{world_size}")
-device_count = torch.xpu.device_count()
+device_count = torch.cuda.device_count()
 #device_count = int(os.environ["NGPU_PER_HOST"])
 
 device = rank % device_count
 local_rank = device
 os.environ['CCL_LOCAL_RANK'] = str(device)
 os.environ['CCL_LOCAL_SIZE'] = str(device_count)
-backend = "ccl"
+backend = "nccl"
 
 if rank == 0:
    master_addr              = socket.gethostname()
@@ -88,7 +88,7 @@ master_port                 = MPI.COMM_WORLD.bcast(master_port, root=0)
 os.environ["MASTER_ADDR"]   = master_addr
 os.environ["MASTER_PORT"]   = str(master_port)
 
-torch.xpu.set_device(device)
+torch.cuda.set_device(device)
 torch.distributed.init_process_group(
     backend=backend,
     init_method="env://",
@@ -97,19 +97,19 @@ torch.distributed.init_process_group(
 )
 d1 = args.sequence_length #4608 #4608 sequence length
 d2 = 9216 #9216 hidden dimension
-all_gather_buffer = torch.zeros([d1, 1, d2], dtype=torch.bfloat16, device=f"xpu:{torch.xpu.current_device()}")
-input = torch.rand([d1//world_size, 1, d2], dtype=torch.bfloat16, device=f"xpu:{torch.xpu.current_device()}")
+all_gather_buffer = torch.zeros([d1, 1, d2], dtype=torch.bfloat16, device=f"cuda:{torch.cuda.current_device()}")
+input = torch.rand([d1//world_size, 1, d2], dtype=torch.bfloat16, device=f"cuda:{torch.cuda.current_device()}")
 #print(f"Input shape = {input.shape}")
 mm1 = torch.rand(
         d2//world_size,
         d2,
-        device=f"xpu:{torch.xpu.current_device()}",
+        device=f"cuda:{torch.cuda.current_device()}",
         dtype=torch.bfloat16,
     )*1e-4
 mm2 = torch.rand(
         d2,
         d2//world_size,
-        device=f"xpu:{torch.xpu.current_device()}",
+        device=f"cuda:{torch.cuda.current_device()}",
         dtype=torch.bfloat16,
     )*1e-3
 #warmup
@@ -141,34 +141,34 @@ for i in range(args.iterations):
     torch.distributed.all_gather_into_tensor(
         all_gather_buffer, input
     )
-    torch.xpu.synchronize()
+    torch.cuda.synchronize()
     end = time.time()
     time0 += end-start
     list_all_gather_times.append(end-start)
     start = end
 
     intermediate = torch.matmul(all_gather_buffer, mm1.t())
-    torch.xpu.synchronize()
+    torch.cuda.synchronize()
     end = time.time()
     time1 += end-start
     #FA would be here
     start = end
     intermediate = torch.matmul(intermediate, mm2.t())
-    torch.xpu.synchronize()
+    torch.cuda.synchronize()
     end = time.time()
     time2 += end-start
     start = end
     torch.distributed.reduce_scatter_tensor(
         input, intermediate
     )
-    torch.xpu.synchronize()
+    torch.cuda.synchronize()
     end = time.time()
     time3 += end-start
     list_reduce_scatter_times.append(end-start)
     #gather optimizer states
     #allreduce model updates
 end_time=time.time()
-torch.xpu.synchronize()
+torch.cuda.synchronize()
 if rank == 0:
     print("times", time0*1000, time1*1000, time2*1000, time3*1000)
     print(f"Mean before all operations = {input_mean_before_operations}")
