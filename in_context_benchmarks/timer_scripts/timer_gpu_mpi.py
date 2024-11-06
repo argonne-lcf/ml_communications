@@ -1,45 +1,44 @@
 from mpi4py import MPI
-import torch
 
-class GPUTimer:
-    def __init__(self, comm=MPI.COMM_WORLD):
-        self.start_event = torch.cuda.Event(enable_timing=True)
-        self.end_event = torch.cuda.Event(enable_timing=True)
-        self.elapsed_time = 0.0
-        self.comm = comm
+import torch
+import time
+
+class Timer:
+    def __init__(self):
+        self.start_time = None
+        self.elapsed_time = None
+        self.comm = MPI.COMM_WORLD
         self.rank = self.comm.Get_rank()
-        self.size = self.comm.Get_size()
 
     def start(self):
-        #self.comm.Barrier()  # Synchronize all processes
-        self.start_event.record()
+        self.start_time = torch.cuda.Event(enable_timing=True)
+        self.end_time = torch.cuda.Event(enable_timing=True)
+        self.start_time.record()
 
     def stop(self):
-        self.end_event.record()
+        self.end_time.record()
         torch.cuda.synchronize()
-        elapsed = self.start_event.elapsed_time(self.end_event)  # Time in milliseconds
-        self.elapsed_time += elapsed / 1000.0  # Convert milliseconds to seconds
-        return self.elapsed_time
-
-    def get_duration(self):
-        total_duration = self.comm.reduce(self.elapsed_time, op=MPI.SUM, root=0)
+        self.elapsed_time = self.start_time.elapsed_time(self.end_time)
         if self.rank == 0:
-            return total_duration / self.size
-        return None
+            all_times = self.comm.gather(self.elapsed_time, root=0)
+        else:
+            self.comm.gather(self.elapsed_time, root=0)
 
-# Usage example
-gpu_timer = GPUTimer()
+        if self.rank == 0:
+            self.elapsed_time = max(all_times)
+            print(f"Max timing = {self.elapsed_time} ms")
 
-# Example to time a PyTorch GPU operation
-def some_gpu_pytorch_operation():
-    x = torch.rand(1000, 1000).cuda()  # Allocate tensor on GPU
-    y = torch.matmul(x, x)
-    return y
+    def get_time(self):
+        return self.elapsed_time / 1000.0  # Convert to milliseconds
 
-# Time the operation
-gpu_timer.start()
-result = some_gpu_pytorch_operation()
-elapsed = gpu_timer.stop()
 
-if gpu_timer.rank == 0:
-    print(f"Elapsed GPU time on average across processes: {gpu_timer.get_duration():.6f} seconds")
+# Usage Example
+timer = Timer()
+tensor = torch.randn(1024, 1024, device='cuda')
+
+timer.start()
+#result = tensor.mm(tensor)
+result = torch.matmul(tensor, tensor)
+timer.stop()
+
+print(f"Matrix multiplication took {timer.get_time():.4f} ms")
