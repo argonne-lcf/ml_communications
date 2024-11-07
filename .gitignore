@@ -1,3 +1,6 @@
 # Python
 __pycache__/
 *.pyc
+
+#logs
+in_context_benchmarks/llm_benchmarks/logs/

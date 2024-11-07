@@ -88,67 +88,7 @@ log_filepath = os.path.join(log_directory, log_filename)
 
 if args.device == "xpu":
     import intel_extension_for_pytorch as ipex 
-    import oneccl_bindings_for_pytorch
-
-def sequence_parallel(iterations, warmup=False):
-    t_allgather = 0.0
-    t_W_QKV = 0.0
-    t_W_0 = 0.0
-    t_reduce_scatter = 0.0
-
-    list_all_gather_times = np.zeros(args.iterations)
-    list_reduce_scatter_times = np.zeros(args.iterations)
-    SequenceParallelResults = namedtuple("SequenceParallelResults", 
-                      ["t_allgather", "t_W_QKV", "t_W_0", "t_reduce_scatter", 
-                       "list_all_gather_times", "list_reduce_scatter_times"])
-
-    for i in range(iterations):
-        start = time.perf_counter_ns()
-        torch.distributed.all_gather_into_tensor(
-            all_gather_buffer, input
-        )
-        synchronize(args.device)
-        end = time.perf_counter_ns()
-        if warmup:
-            if rank == 0:
-                logging.info("Doing Warmups")
-            t_allgather =  0.0
-        else:
-            t_allgather += end-start
-            list_all_gather_times[i] = (end-start)
-            start = end
-
-        intermediate = torch.matmul(all_gather_buffer, attn_W_QKV.t())
-        synchronize(args.device)
-        end = time.perf_counter_ns()
-        if warmup:
-            t_W_QKV = 0.0
-        else:
-            t_W_QKV += end-start
-            #FA would be here
-            start = end
-        intermediate = torch.matmul(intermediate, attn_W_0.t())
-        synchronize(args.device)
-        end = time.perf_counter_ns()
-        if warmup:
-            t_W_0 = 0.0
-        else:
-            t_W_0 += end-start
-            start = end
-        torch.distributed.reduce_scatter_tensor(
-            input, intermediate
-        )
-        synchronize(args.device)
-        end = time.perf_counter_ns()
-        if warmup:
-            t_reduce_scatter = 0.0
-        else:
-            t_reduce_scatter += end-start
-            list_reduce_scatter_times[i] = (end-start)
-        #gather optimizer states
-        #allreduce model updates
-    return SequenceParallelResults(t_allgather, t_W_QKV, t_W_0, t_reduce_scatter, 
-                                   list_all_gather_times, list_reduce_scatter_times)
+    import oneccl_bindings_for_pytorch 
 
 def synchronize(device):
     if device == "cuda":
@@ -265,6 +205,67 @@ attn_W_0 = torch.rand(
     )*1e-8
 
 input_mean_before_operations=input.mean()
+
+def sequence_parallel(iterations, warmup=False):
+    t_allgather = 0.0
+    t_W_QKV = 0.0
+    t_W_0 = 0.0
+    t_reduce_scatter = 0.0
+
+    list_all_gather_times = np.zeros(args.iterations)
+    list_reduce_scatter_times = np.zeros(args.iterations)
+    SequenceParallelResults = namedtuple("SequenceParallelResults", 
+                      ["t_allgather", "t_W_QKV", "t_W_0", "t_reduce_scatter", 
+                       "list_all_gather_times", "list_reduce_scatter_times"])
+
+    for i in range(iterations):
+        start = time.perf_counter_ns()
+        torch.distributed.all_gather_into_tensor(
+            all_gather_buffer, input
+        )
+        synchronize(args.device)
+        end = time.perf_counter_ns()
+        if warmup:
+            if rank == 0:
+                logging.info("Doing Warmups")
+            t_allgather =  0.0
+        else:
+            t_allgather += end-start
+            list_all_gather_times[i] = (end-start)
+            start = end
+
+        intermediate = torch.matmul(all_gather_buffer, attn_W_QKV.t())
+        synchronize(args.device)
+        end = time.perf_counter_ns()
+        if warmup:
+            t_W_QKV = 0.0
+        else:
+            t_W_QKV += end-start
+            #FA would be here
+            start = end
+        intermediate = torch.matmul(intermediate, attn_W_0.t())
+        synchronize(args.device)
+        end = time.perf_counter_ns()
+        if warmup:
+            t_W_0 = 0.0
+        else:
+            t_W_0 += end-start
+            start = end
+        torch.distributed.reduce_scatter_tensor(
+            input, intermediate
+        )
+        synchronize(args.device)
+        end = time.perf_counter_ns()
+        if warmup:
+            t_reduce_scatter = 0.0
+        else:
+            t_reduce_scatter += end-start
+            list_reduce_scatter_times[i] = (end-start)
+        #gather optimizer states
+        #allreduce model updates
+    return SequenceParallelResults(t_allgather, t_W_QKV, t_W_0, t_reduce_scatter, 
+                                   list_all_gather_times, list_reduce_scatter_times)
+
 
 # Doing Warmups
 sequence_parallel(iterations=args.warmup_iterations, warmup=True)
