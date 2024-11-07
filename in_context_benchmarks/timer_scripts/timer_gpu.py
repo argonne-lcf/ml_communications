@@ -34,6 +34,7 @@ class GPUTimer:
         return self.elapsed_time
 
 # Usage example
+"""
 gpu_timer = GPUTimer()
 
 x = torch.rand(1000, 1000, device="cuda")  # Allocate tensor on GPU
@@ -49,3 +50,4 @@ result = some_gpu_pytorch_operation(x)
 elapsed = gpu_timer.stop()
 
 print(f"Elapsed GPU time: {elapsed:.6f} milliseconds")
+"""

@@ -37,6 +37,7 @@ class Timer:
         return self.duration / 1e6  # Convert nanoseconds to milliseconds
 
 # Usage
+'''
 timer = Timer()
 x = torch.rand(1000, 1000, device="cuda")
 
@@ -51,3 +52,4 @@ result = some_pytorch_operation(x)
 elapsed = timer.stop()
 
 print(f"Elapsed time: {elapsed:.6f} milliseconds")
+'''

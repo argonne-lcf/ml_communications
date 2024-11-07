@@ -41,12 +41,8 @@ import os
 import time
 import socket
 import argparse
-from collections import namedtuple 
 
 import torch
-import numpy as np
-
-from timer_scripts import timer, timer_gpu 
 
 #import intel_extension_for_pytorch as ipex  # noqa: F401 # type: ignore
 #import oneccl_bindings_for_pytorch  # noqa: F401 # type: ignore
@@ -131,82 +127,61 @@ mm2 = torch.rand(
     )*1e-8
 #warmup
 input_mean_before_operations=input.mean()
+#print("in_mean0", input.mean())
+for i in range(args.warmup_iterations):
+    torch.distributed.all_gather_into_tensor(
+        all_gather_buffer, input
+    )
+    intermediate = torch.matmul(all_gather_buffer, mm1.t())
+    #FA here
+    intermediate = torch.matmul(intermediate, mm2.t())
+    torch.distributed.reduce_scatter_tensor(
+        input, intermediate
+    )
+print("start loop", flush=True)
+#print("in_mean1", input.mean())
+time0 = 0.0
+time1 = 0.0
+time2 = 0.0
+time3 = 0.0
 
-def sequence_parallel(iterations, warmup=False):
-    t_allgather = 0.0
-    t_mm1 = 0.0
-    t_mm2 = 0.0
-    t_reduce_scatter = 0.0
+list_all_gather_times = []
+list_reduce_scatter_times = []
 
-    list_all_gather_times = np.zeros(args.iterations)
-    list_reduce_scatter_times = np.zeros(args.iterations)
-    SequenceParallelResults = namedtuple("SequenceParallelResults", 
-                      ["t_allgather", "t_mm1", "t_mm2", "t_reduce_scatter", 
-                       "list_all_gather_times", "list_reduce_scatter_times"])
+start_time=time.time()
+for i in range(args.iterations):
+    start = time.time()
+    torch.distributed.all_gather_into_tensor(
+        all_gather_buffer, input
+    )
+    torch.cuda.synchronize()
+    end = time.time()
+    time0 += end-start
+    list_all_gather_times.append(end-start)
+    start = end
 
-
-
-    for i in range(iterations):
-        start = time.perf_counter_ns()
-        torch.distributed.all_gather_into_tensor(
-            all_gather_buffer, input
-        )
-        torch.cuda.synchronize()
-        end = time.perf_counter_ns()
-        if warmup:
-            if rank == 0:
-                print("Doing Warmups")
-            t_allgather =  0.0
-        else:
-            t_allgather += end-start
-            list_all_gather_times[i] = (end-start)
-            start = end
-
-        intermediate = torch.matmul(all_gather_buffer, mm1.t())
-        torch.cuda.synchronize()
-        end = time.perf_counter_ns()
-        if warmup:
-            t_mm1 = 0.0
-        else:
-            t_mm1 += end-start
-            #FA would be here
-            start = end
-        intermediate = torch.matmul(intermediate, mm2.t())
-        torch.cuda.synchronize()
-        end = time.perf_counter_ns()
-        if warmup:
-            t_mm2 = 0.0
-        else:
-            t_mm2 += end-start
-            start = end
-        torch.distributed.reduce_scatter_tensor(
-            input, intermediate
-        )
-        torch.cuda.synchronize()
-        end = time.perf_counter_ns()
-        if warmup:
-            t_reduce_scatter = 0.0
-        else:
-            t_reduce_scatter += end-start
-            list_reduce_scatter_times[i] = (end-start)
-        #gather optimizer states
-        #allreduce model updates
-    return SequenceParallelResults(t_allgather, t_mm1, t_mm2, t_reduce_scatter, 
-                                   list_all_gather_times, list_reduce_scatter_times)
-
- 
-
-sequence_parallel(iterations=args.warmup_iterations, warmup=True)
-start_time=time.perf_counter_ns()
-Results = sequence_parallel(iterations=args.iterations, warmup=False)
-end_time=time.perf_counter_ns()
-total_time_allgather = Results.t_allgather
-total_time_mm1 = Results.t_mm1
-total_time_mm2 = Results.t_mm2
-total_time_reduce_scatter = Results.t_reduce_scatter
-all_gather_times = Results.list_all_gather_times 
-reduce_scatter_times = Results.list_reduce_scatter_times 
-#torch.cuda.synchronize()
+    intermediate = torch.matmul(all_gather_buffer, mm1.t())
+    torch.cuda.synchronize()
+    end = time.time()
+    time1 += end-start
+    #FA would be here
+    start = end
+    intermediate = torch.matmul(intermediate, mm2.t())
+    torch.cuda.synchronize()
+    end = time.time()
+    time2 += end-start
+    start = end
+    torch.distributed.reduce_scatter_tensor(
+        input, intermediate
+    )
+    torch.cuda.synchronize()
+    end = time.time()
+    time3 += end-start
+    list_reduce_scatter_times.append(end-start)
+    #gather optimizer states
+    #allreduce model updates
+end_time=time.time()
+torch.cuda.synchronize()
 if rank == 0:
     print(f"Running with {args.precision} data type")
     print(f"\n ==== List of Arguments ==== \n")
@@ -220,14 +195,14 @@ if rank == 0:
     print(f"ALLGATHER Buffer size = {(args.sequence_length * data_type_multiplier) / 8 / 1000 / 1000} MB")
     #print("times", time0*1000, time1*1000, time2*1000, time3*1000)
     print(f"Mean before all operations = {input_mean_before_operations}")
-    print(f"Total time taken for ALLGATHER = {total_time_allgather / 1e6} ms" )
-    print(f"Total time taken for matrix multiplication 1 = {total_time_mm1 / 1e6} ms")
-    print(f"Total time taken for matrix multiplication 2 = {total_time_mm2 / 1e6} ms")
-    print(f"Total time taken for REDUCE_SCATTER = {total_time_reduce_scatter / 1e6} ms")
-    print(f"total time for the loop = {(end_time-start_time) / 1e6} ms")
+    print(f"Total time taken for ALLGATHER = {time0*1000} ms" )
+    print(f"Total time taken for matrix multiplication 1 = {time1*1000} ms")
+    print(f"Total time taken for matrix multiplication 2 = {time2*1000} ms")
+    print(f"Total time taken for REDUCE_SCATTER = {time3*1000} ms")
+    print(f"total time for the loop = {(end_time-start_time)*1000} ms")
     print("Mean after all operations = ", input.mean())
-    print(f"ALLGATHER Throughput = {(args.sequence_length * data_type_multiplier * args.iterations) / (total_time_allgather / 1e9) / 1024 / 1024 } MB/s")
-    print(f"REDUCE_SCATTER Throughput = {(args.sequence_length * data_type_multiplier * args.iterations) / (total_time_reduce_scatter / 1e9) / 1024 / 1024 } MB/s")
+    print(f"ALLGATHER Throughput = {(args.sequence_length * data_type_multiplier * args.iterations) / (time0 * 1000 * 1000) / 1024 / 1024 } MB/s")
+    print(f"REDUCE_SCATTER Throughput = {(args.sequence_length * data_type_multiplier * args.iterations) / (time3 * 1000 * 1000) / 1024 / 1024 } MB/s")
 
-    for idx, (t_ag, t_rs) in enumerate(zip(all_gather_times, reduce_scatter_times)):
-        print(f"ALLGATHER {idx} takes {t_ag / 1e6} ms, REDUCE_SCATTER {idx} takes {t_rs / 1e6} ms")
+    for idx, (t_ag, t_rs) in enumerate(zip(list_all_gather_times, list_reduce_scatter_times)):
+        print(f"ALLGATHER {idx} takes {t_ag*1000} ms, REDUCE_SCATTER {idx} takes {t_rs*1000} ms")
