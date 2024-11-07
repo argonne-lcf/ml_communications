@@ -67,64 +67,22 @@ parser.add_argument("-wit", "--warmup_iterations", help="number of warmup iterat
                     type=int, default=10)
 parser.add_argument("-p", "--precision", help="Data type for the elements of a tensor. float32 and bfloat16 supported.", 
                     type=str, default="float32")
-
-parser.add_argument("-dvc", "--device", help="Device type. cuda and xpu supported.", 
-                    type=str, default="cuda")
+#parser.add_argument("-dv", "--device", help="Device type. cuda and xpu supported.", 
+#                    type=str, default="cuda")
 
 args = parser.parse_args()
-
-def synchronize(device):
-    if device == "cuda":
-        return torch.cuda.synchronize()
-    elif device == "xpu":
-        return torch.xpu.synchronize()
-    else:
-        raise NotImplementedError("This method is not implemented yet.")
-        return None
-
-def get_device_string(device):
-    if device == "cuda": 
-        return f"cuda:{torch.cuda.current_device()}" 
-    elif device == "xpu":
-        
-        return f"xpu:{torch.xpu.current_device()}" 
-    else:
-        raise NotImplementedError("This method is not implemented yet.")
-        return None
-
-def get_device_count(device):
-    if device == "cuda":
-        return torch.cuda.device_count() 
-    elif device == "xpu":
-        return torch.xpu.device_count() 
-    else:
-        raise NotImplementedError("This method is not implemented yet.")
-        return None
-
-def set_device(visible_device):
-    if args.device == "cuda":
-        return torch.cuda.set_device(visible_device)
-    elif args.device == "xpu":
-        return torch.xpu.set_device(visible_device)
-    else:
-        raise NotImplementedError("This method is not implemented yet.")
-        return None
-
-def get_backend(device):
-    if device =="cuda":
-        return "nccl"
-    elif device == "xpu":
-        return "ccl"
-    else:
-        raise NotImplementedError("This method is not implemented yet.")
-        return None
 
 rank = int(MPI.COMM_WORLD.Get_rank())
 world_size = int(MPI.COMM_WORLD.Get_size())
 print(f"rank {rank}/{world_size}")
-visible_device = rank % get_device_count(args.device)
-local_rank = visible_device
-set_device(visible_device)
+device_count = torch.cuda.device_count()
+#device_count = int(os.environ["NGPU_PER_HOST"])
+
+device = rank % device_count
+local_rank = device
+os.environ['CCL_LOCAL_RANK'] = str(device)
+os.environ['CCL_LOCAL_SIZE'] = str(device_count)
+backend = "nccl"
 
 if rank == 0:
    master_addr              = socket.gethostname()
@@ -141,8 +99,9 @@ master_port                 = MPI.COMM_WORLD.bcast(master_port, root=0)
 os.environ["MASTER_ADDR"]   = master_addr
 os.environ["MASTER_PORT"]   = str(master_port)
 
+torch.cuda.set_device(device)
 torch.distributed.init_process_group(
-    backend=get_backend(args.device),
+    backend=backend,
     init_method="env://",
     world_size=world_size,
     rank=rank,
@@ -155,45 +114,46 @@ elif args.precision == "bfloat16":
     data_type = torch.bfloat16
     data_type_multiplier = 16 ## 16 Bits
 
-S = args.sequence_length #4608 #4608 sequence length
-H = args.hidden_dimension #9216 #9216 hidden dimension
-
-all_gather_buffer = torch.zeros([S, 1, H], dtype=data_type, device=get_device_string(args.device))
-input = torch.rand([S//world_size, 1, H], dtype=data_type, device=get_device_string(args.device))
-
-attn_W_QKV = torch.rand(
-        H//world_size,
-        H,
-        device=get_device_string(args.device),
+d1 = args.sequence_length #4608 #4608 sequence length
+d2 = args.hidden_dimension #9216 #9216 hidden dimension
+all_gather_buffer = torch.zeros([d1, 1, d2], dtype=data_type, device=f"cuda:{torch.cuda.current_device()}")
+input = torch.rand([d1//world_size, 1, d2], dtype=data_type, device=f"cuda:{torch.cuda.current_device()}")
+#print(f"Input shape = {input.shape}")
+mm1 = torch.rand(
+        d2//world_size,
+        d2,
+        device=f"cuda:{torch.cuda.current_device()}",
         dtype=data_type,
     )*1e-10
-attn_W_0 = torch.rand(
-        H,
-        H//world_size,
-        device=get_device_string(args.device),
+mm2 = torch.rand(
+        d2,
+        d2//world_size,
+        device=f"cuda:{torch.cuda.current_device()}",
         dtype=data_type,
     )*1e-8
-
+#warmup
 input_mean_before_operations=input.mean()
 
 def sequence_parallel(iterations, warmup=False):
     t_allgather = 0.0
-    t_W_QKV = 0.0
-    t_W_0 = 0.0
+    t_mm1 = 0.0
+    t_mm2 = 0.0
     t_reduce_scatter = 0.0
 
     list_all_gather_times = np.zeros(args.iterations)
     list_reduce_scatter_times = np.zeros(args.iterations)
     SequenceParallelResults = namedtuple("SequenceParallelResults", 
-                      ["t_allgather", "t_W_QKV", "t_W_0", "t_reduce_scatter", 
+                      ["t_allgather", "t_mm1", "t_mm2", "t_reduce_scatter", 
                        "list_all_gather_times", "list_reduce_scatter_times"])
+
+
 
     for i in range(iterations):
         start = time.perf_counter_ns()
         torch.distributed.all_gather_into_tensor(
             all_gather_buffer, input
         )
-        synchronize(args.device)
+        torch.cuda.synchronize()
         end = time.perf_counter_ns()
         if warmup:
             if rank == 0:
@@ -204,27 +164,27 @@ def sequence_parallel(iterations, warmup=False):
             list_all_gather_times[i] = (end-start)
             start = end
 
-        intermediate = torch.matmul(all_gather_buffer, attn_W_QKV.t())
-        synchronize(args.device)
+        intermediate = torch.matmul(all_gather_buffer, mm1.t())
+        torch.cuda.synchronize()
         end = time.perf_counter_ns()
         if warmup:
-            t_W_QKV = 0.0
+            t_mm1 = 0.0
         else:
-            t_W_QKV += end-start
+            t_mm1 += end-start
             #FA would be here
             start = end
-        intermediate = torch.matmul(intermediate, attn_W_0.t())
-        synchronize(args.device)
+        intermediate = torch.matmul(intermediate, mm2.t())
+        torch.cuda.synchronize()
         end = time.perf_counter_ns()
         if warmup:
-            t_W_0 = 0.0
+            t_mm2 = 0.0
         else:
-            t_W_0 += end-start
+            t_mm2 += end-start
             start = end
         torch.distributed.reduce_scatter_tensor(
             input, intermediate
         )
-        synchronize(args.device)
+        torch.cuda.synchronize()
         end = time.perf_counter_ns()
         if warmup:
             t_reduce_scatter = 0.0
@@ -233,24 +193,22 @@ def sequence_parallel(iterations, warmup=False):
             list_reduce_scatter_times[i] = (end-start)
         #gather optimizer states
         #allreduce model updates
-    return SequenceParallelResults(t_allgather, t_W_QKV, t_W_0, t_reduce_scatter, 
+    return SequenceParallelResults(t_allgather, t_mm1, t_mm2, t_reduce_scatter, 
                                    list_all_gather_times, list_reduce_scatter_times)
 
+ 
 
-# Doing Warmups
 sequence_parallel(iterations=args.warmup_iterations, warmup=True)
-# Collecting results
 start_time=time.perf_counter_ns()
 Results = sequence_parallel(iterations=args.iterations, warmup=False)
 end_time=time.perf_counter_ns()
-# Extracting results
 total_time_allgather = Results.t_allgather
-total_time_W_QKV = Results.t_W_QKV
-total_time_W_0 = Results.t_W_0
+total_time_mm1 = Results.t_mm1
+total_time_mm2 = Results.t_mm2
 total_time_reduce_scatter = Results.t_reduce_scatter
 all_gather_times = Results.list_all_gather_times 
-reduce_scatter_times = Results.list_reduce_scatter_times
-
+reduce_scatter_times = Results.list_reduce_scatter_times 
+#torch.cuda.synchronize()
 if rank == 0:
     print(f"Running with {args.precision} data type")
     print(f"\n ==== List of Arguments ==== \n")
@@ -259,14 +217,14 @@ if rank == 0:
     print(f"Precision Type = {args.precision}")
     print("\n ==== List of Arguments ==== \n")
     print(f"Input shape = {input.shape}")
-    print(f"Matrix 1 shape = {attn_W_QKV.shape}")
-    print(f"Matrix 2 shape = {attn_W_0.shape}")
+    print(f"Matrix 1 shape = {mm1.shape}")
+    print(f"Matrix 2 shape = {mm2.shape}")
     print(f"ALLGATHER Buffer size = {(args.sequence_length * data_type_multiplier) / 8 / 1000 / 1000} MB")
     #print("times", time0*1000, time1*1000, time2*1000, time3*1000)
     print(f"Mean before all operations = {input_mean_before_operations}")
     print(f"Total time taken for ALLGATHER = {total_time_allgather / 1e6} ms" )
-    print(f"Total time taken for matrix multiplication 1 = {total_time_W_QKV / 1e6} ms")
-    print(f"Total time taken for matrix multiplication 2 = {total_time_W_0 / 1e6} ms")
+    print(f"Total time taken for matrix multiplication 1 = {total_time_mm1 / 1e6} ms")
+    print(f"Total time taken for matrix multiplication 2 = {total_time_mm2 / 1e6} ms")
     print(f"Total time taken for REDUCE_SCATTER = {total_time_reduce_scatter / 1e6} ms")
     print(f"total time for the loop = {(end_time-start_time) / 1e6} ms")
     print("Mean after all operations = ", input.mean())
