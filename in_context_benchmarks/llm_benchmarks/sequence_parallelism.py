@@ -73,6 +73,10 @@ parser.add_argument("-dvc", "--device", help="Device type. cuda and xpu supporte
 
 args = parser.parse_args()
 
+if args.device == "xpu":
+    import intel_extension_for_pytorch as ipex 
+    import oneccl_bindings_for_pytorch 
+
 def synchronize(device):
     if device == "cuda":
         return torch.cuda.synchronize()
@@ -259,9 +263,9 @@ if rank == 0:
     print(f"Precision Type = {args.precision}")
     print("\n ==== List of Arguments ==== \n")
     print(f"Input shape = {input.shape}")
-    print(f"Matrix 1 shape = {attn_W_QKV.shape}")
-    print(f"Matrix 2 shape = {attn_W_0.shape}")
-    print(f"ALLGATHER Buffer size = {(args.sequence_length * data_type_multiplier) / 8 / 1000 / 1000} MB")
+    print(f"Matrix W_QKV  shape = {attn_W_QKV.shape}")
+    print(f"Matrix W_0 shape = {attn_W_0.shape}")
+    print(f"ALLGATHER Buffer size = {(args.sequence_length * data_type_multiplier) / 8 / 1024 / 1024} MB")
     #print("times", time0*1000, time1*1000, time2*1000, time3*1000)
     print(f"Mean before all operations = {input_mean_before_operations}")
     print(f"Total time taken for ALLGATHER = {total_time_allgather / 1e6} ms" )
@@ -270,8 +274,8 @@ if rank == 0:
     print(f"Total time taken for REDUCE_SCATTER = {total_time_reduce_scatter / 1e6} ms")
     print(f"total time for the loop = {(end_time-start_time) / 1e6} ms")
     print("Mean after all operations = ", input.mean())
-    print(f"ALLGATHER Throughput = {(args.sequence_length * data_type_multiplier * args.iterations) / (total_time_allgather / 1e9) / 1024 / 1024 } MB/s")
-    print(f"REDUCE_SCATTER Throughput = {(args.sequence_length * data_type_multiplier * args.iterations) / (total_time_reduce_scatter / 1e9) / 1024 / 1024 } MB/s")
+    print(f"ALLGATHER Throughput = {(args.sequence_length * data_type_multiplier * args.iterations) / (total_time_allgather / 1e9) / 8 / 1024 / 1024 } MB/s")
+    print(f"REDUCE_SCATTER Throughput = {(args.sequence_length * data_type_multiplier * args.iterations) / (total_time_reduce_scatter / 1e9) / 8 / 1024 / 1024 } MB/s")
 
     for idx, (t_ag, t_rs) in enumerate(zip(all_gather_times, reduce_scatter_times)):
         print(f"ALLGATHER {idx} takes {t_ag / 1e6} ms, REDUCE_SCATTER {idx} takes {t_rs / 1e6} ms")
