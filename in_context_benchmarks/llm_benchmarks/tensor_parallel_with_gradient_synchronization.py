@@ -28,10 +28,7 @@ parser.add_argument("-it", "--iterations",
 parser.add_argument("-wit", "--warmup_iterations", help="number of warmup iterations",
                     type=int, default=2)
 
-parser.add_argument("-tp_switch", "--tensor_parallel_switch", help="If TRUE, implements tensor parallelism of tp_degree",
-                    type=bool, default=True)
-
-parser.add_argument("-bucket", "--size_of_the_largest_bucket_for_grad_allreduce", help="The largest bucket of message passed to do the allreduce over the data parallel groups (in number of elements in a message).",
+parser.add_argument("-bucket", "--grad_allreduce_bucket", help="The largest bucket of message passed to do the allreduce over the data parallel groups (in number of elements in a message).",
                     type=int, default=5e8)
 
 parser.add_argument("-dp_switch", "--data_parallel_switch", help="If TRUE, calculates data parallelism degree based of tp_degree",
@@ -44,8 +41,6 @@ parser.add_argument("-sp_switch", "--sequence_parallel_switch", help="Switch seq
 
 parser.add_argument("-n_layers", "--number_of_transformer_layers", help="Number of transformer layers", type=int, default=80)
 
-parser.add_argument("-n_timing_loops", "--number_of_timing_loops", help="Number of timing loops", type=int, default=3)
-
 parser.add_argument("-p", "--precision", help="Data type for the elements of a tensor. float32 and bfloat16 supported.",
                     type=str, default="float32")
 
@@ -53,15 +48,12 @@ parser.add_argument("-dvc", "--device", help="Device type. cuda and xpu supporte
                     type=str, default="cuda")
 
 parser.add_argument("-f", "--log_file", help="Output file name",
-                    type=str, default="sequence_parallel.log")
+                    type=str, default="tensor_parallel.log")
 
 parser.add_argument("-dir", "--log_directory", help="Output file path",
                     type=str, default="logs/")
 
 parser.add_argument("--logging", help="Switch logging on", action='store_true')
-
-#parser.add_argument("-dp_degree", "--data_parallel_degree", help="Data Parallel degree. In this context, the data (tokens etc.) is distributed across the number of (data parallel degree)) ranks",
-#                    type=int, default=6)
 
 args = parser.parse_args()
 warmup=args.warmup_iterations
@@ -237,27 +229,27 @@ if SP:
 else:
     input = torch.rand([S, M, H], dtype=data_type, device=get_device_string(args.device))
 #print(f"Input shape = {input.shape}")
-mm1 = torch.rand(
+attn_W_QKV = torch.rand(
         H//TP,
         H,
         device=get_device_string(args.device),
         dtype=data_type,
     )*1e-4
 
-mm2 = torch.rand(
+attn_WO = torch.rand(
         H,
         H//TP,
         device=get_device_string(args.device),
         dtype=data_type,
     )*1e-3
 
-mm3 = torch.rand(
+mat_h_4h = torch.rand(
         4*H//TP,
         H,
         device=get_device_string(args.device),
         dtype=data_type,
     )*1e-4
-mm4 = torch.rand(
+mat_4h_h = torch.rand(
         H,
         4*H//TP,
         device=get_device_string(args.device),
@@ -265,12 +257,12 @@ mm4 = torch.rand(
     )*1e-3
 
 n_layers = args.number_of_transformer_layers
-number_of_total_parameters = ((mm1.shape[0]*mm1.shape[1] + mm2.shape[0]*mm2.shape[1] +  mm3.shape[0]*mm3.shape[1] +  mm4.shape[0]*mm4.shape[1]) * n_layers)
+number_of_total_parameters = ((attn_W_QKV.shape[0]*attn_W_QKV.shape[1] + attn_WO.shape[0]*attn_WO.shape[1] +  mat_h_4h.shape[0]*mat_h_4h.shape[1] +  mat_4h_h.shape[0]*mat_4h_h.shape[1]) * n_layers)
 #print(f"Parameters = {number_of_total_parameters / 1e9} Billions")
 
 # number of iterations for the gradient synchronization loop
 
-highest_bucket_size = int(args.size_of_the_largest_bucket_for_grad_allreduce)
+highest_bucket_size = int(args.grad_allreduce_bucket)
 n_iter_grad_sync = math.ceil(number_of_total_parameters / highest_bucket_size)
 
 allreduce_grad = torch.rand([highest_bucket_size], dtype=data_type, device=get_device_string(args.device))
@@ -291,7 +283,7 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync, warmup=False):
  
     #N_timing_loop = args.number_of_timing_loops 
     for m in range(N_timing_loop):
-        timing_loop_start_time=time.time()
+        timing_loop_start_time=time.perf_counter_ns()
         t_ag_1 = 0.0 # dummy variable for timing the first allgather 
         t_qkv = 0.0 # dummy variable for timing the QKV matrix multiplication
         t_WO = 0.0 # dummy variable for timing the WO matrix multiplication
@@ -305,13 +297,13 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync, warmup=False):
         t_grad = 0.0 # dummy variable for timing the gradient sync. allreduce
         timing_loop_time = 0.0
         for i in range(n_layers):
-            start = time.time()
+            start = time.perf_counter_ns()
             if SP:
                 torch.distributed.all_gather_into_tensor(
                     input, partial_input, group=tp_group
                 )
                 synchronize(args.device)
-                end = time.time()
+                end = time.perf_counter_ns()
                 if warmup:
                     #if rank == 0:
                         #print("Doing Warmups")
@@ -320,10 +312,10 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync, warmup=False):
                 else:
                     T_dict_individual["T_allgather_1"][m][i] = (end-start)
                     t_ag_1 += end - start
-            start = time.time()
-            interim1 = torch.matmul(input, mm1.t())
+            start = time.perf_counter_ns()
+            interim1 = torch.matmul(input, attn_W_QKV.t())
             synchronize(args.device)
-            end = time.time()
+            end = time.perf_counter_ns()
             if warmup:
                 T_dict_individual["T_QKV"][m][i] = 0.0
                 t_qkv = 0.0
@@ -331,22 +323,22 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync, warmup=False):
                 T_dict_individual["T_QKV"][m][i] = (end - start)
                 t_qkv += end-start
             start = end
-            interim2 = torch.matmul(interim1, mm2.t())
+            interim2 = torch.matmul(interim1, attn_WO.t())
             synchronize(args.device)
-            end = time.time()
+            end = time.perf_counter_ns()
             if warmup:
                 T_dict_individual["T_WO"][m][i] = 0.0
                 t_WO = 0.0 
             else:
                 T_dict_individual["T_WO"][m][i] = (end - start)
                 t_WO += end-start
-            start = time.time()
+            start = time.perf_counter_ns()
             if SP:
                 torch.distributed.reduce_scatter_tensor(
                 partial_interim2, interim2, group=tp_group
                 )
                 synchronize(args.device)
-                end = time.time()
+                end = time.perf_counter_ns()
                 if warmup:
                     T_dict_individual["T_reduce_scatter_1"][m][i] = 0.0
                     t_rs_1 = 0.0
@@ -354,13 +346,13 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync, warmup=False):
                     T_dict_individual["T_reduce_scatter_1"][m][i] = (end - start)
                     t_rs_1 += end-start
             else:
-                start = time.time()
+                start = time.perf_counter_ns()
                 #print("Doing ALLREDUCE now")
                 torch.distributed.all_reduce(
                     interim2, group=tp_group
                 )
                 synchronize(args.device)
-                end = time.time()
+                end = time.perf_counter_ns()
                 if warmup:
                     T_dict_individual["T_allreduce_1"][m][i] = 0.0
                     t_ardc_1 = 0.0
@@ -368,22 +360,22 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync, warmup=False):
                     T_dict_individual["T_allreduce_1"][m][i] = (end - start)
                     t_ardc_1 += end-start
             if SP:
-                start = time.time()
+                start = time.perf_counter_ns()
                 torch.distributed.all_gather_into_tensor(
                     interim2, partial_interim2, group=tp_group
                 )
                 synchronize(args.device)
-                end = time.time()
+                end = time.perf_counter_ns()
                 if warmup:
                     T_dict_individual["T_allgather_2"][m][i] = 0.0
                     t_ag_2 = 0.0
                 else:
                     T_dict_individual["T_allgather_2"][m][i] = (end - start)
                     t_ag_2 += end-start
-            start = time.time()
-            interim3 = torch.matmul(interim2, mm3.t())
+            start = time.perf_counter_ns()
+            interim3 = torch.matmul(interim2, mat_h_4h.t())
             synchronize(args.device)
-            end = time.time()
+            end = time.perf_counter_ns()
             if warmup:
                 T_dict_individual["T_H_4H"][m][i] = 0.0
                 t_h_4h = 0.0
@@ -391,9 +383,9 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync, warmup=False):
                 T_dict_individual["T_H_4H"][m][i] = (end - start)
                 t_h_4h += end-start
             start = end
-            interim4 = torch.matmul(interim3, mm4.t())
+            interim4 = torch.matmul(interim3, mat_4h_h.t())
             synchronize(args.device)
-            end = time.time()
+            end = time.perf_counter_ns()
             if warmup:
                 T_dict_individual["T_4H_H"][m][i] = 0.0
                 t_4h_h = 0.0
@@ -402,13 +394,13 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync, warmup=False):
                 t_4h_h += end-start
             #
             if SP:
-                start = time.time()
+                start = time.perf_counter_ns()
                 #print("Doing Reduce Scatter Now")
                 torch.distributed.reduce_scatter_tensor(
                     partial_interim4, interim4, group=tp_group
                 )
                 synchronize(args.device)
-                end = time.time()
+                end = time.perf_counter_ns()
                 if warmup:
                     T_dict_individual["T_reduce_scatter_2"][m][i] = 0.0
                     t_rs_2 = 0.0
@@ -416,12 +408,12 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync, warmup=False):
                     T_dict_individual["T_reduce_scatter_2"][m][i] = (end - start)
                     t_rs_2 += end-start
             else:
-                start = time.time()
+                start = time.perf_counter_ns()
                 torch.distributed.all_reduce(
                     interim4, group=tp_group
                 )
                 synchronize(args.device)
-                end = time.time()
+                end = time.perf_counter_ns()
                 if warmup:
                     T_dict_individual["T_allreduce_2"][m][i] = 0.0
                     t_ardc_2 = 0.0
@@ -430,40 +422,46 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync, warmup=False):
                     t_ardc_2 += end-start
         synchronize(args.device)
         for k in range(n_iter_grad_sync):
-            start = time.time()
+            start = time.perf_counter_ns()
             torch.distributed.all_reduce(
                 allreduce_grad, group=dp_group
             )
             synchronize(args.device)
-            end = time.time()
+            end = time.perf_counter_ns()
             if warmup:
                 T_grad_sync_individual[m][k] = 0.0
                 t_grad = 0.0
             else:
                 T_grad_sync_individual[m][k] = (end - start)
                 t_grad += end-start
-        T_dict_total["T_grad_sync"][m] = (t_grad * 1000)
+        T_dict_total["T_grad_sync"][m] = (t_grad / 1e6 )
         synchronize(args.device)
-        T_dict_total["T_allgather_1"][m] = (t_ag_1 * 1000)
-        T_dict_total["T_QKV"][m] = (t_qkv * 1000)
-        T_dict_total["T_WO"][m] = (t_WO * 1000)
-        T_dict_total["T_reduce_scatter_1"][m] = (t_rs_1 * 1000)
-        T_dict_total["T_allreduce_1"][m] = (t_ardc_1 * 1000)
-        T_dict_total["T_allgather_2"][m] = (t_ag_2 * 1000)
-        T_dict_total["T_H_4H"][m] = (t_h_4h * 1000)
-        T_dict_total["T_4H_H"][m] = (t_4h_h * 1000)
-        T_dict_total["T_reduce_scatter_2"][m] = (t_rs_2 * 1000)
-        T_dict_total["T_allreduce_2"][m] = (t_ardc_2 * 1000)
-        timing_loop_end_time=time.time()
-        T_dict_total["T_timing_loop"][m] = ((timing_loop_end_time - timing_loop_start_time) * 1000)  
+        T_dict_total["T_allgather_1"][m] = (t_ag_1 / 1e6 )
+        T_dict_total["T_QKV"][m] = (t_qkv / 1e6 )
+        T_dict_total["T_WO"][m] = (t_WO / 1e6 )
+        T_dict_total["T_reduce_scatter_1"][m] = (t_rs_1 / 1e6 )
+        T_dict_total["T_allreduce_1"][m] = (t_ardc_1 / 1e6 )
+        T_dict_total["T_allgather_2"][m] = (t_ag_2 / 1e6 )
+        T_dict_total["T_H_4H"][m] = (t_h_4h / 1e6 )
+        T_dict_total["T_4H_H"][m] = (t_4h_h / 1e6 )
+        T_dict_total["T_reduce_scatter_2"][m] = (t_rs_2 / 1e6 )
+        T_dict_total["T_allreduce_2"][m] = (t_ardc_2 / 1e6 )
+        timing_loop_end_time=time.perf_counter_ns()
+        T_dict_total["T_timing_loop"][m] = ((timing_loop_end_time - timing_loop_start_time) / 1e6 )  
         timing_loop_time += (timing_loop_end_time - timing_loop_start_time)
         timing_loop_start_time = timing_loop_end_time
     return T_dict_individual, T_dict_total, T_grad_sync_individual
 
 tensor_parallel(args.warmup_iterations, args.number_of_transformer_layers, n_iter_grad_sync, warmup=True)
-result = tensor_parallel(args.number_of_timing_loops, args.number_of_transformer_layers, n_iter_grad_sync, warmup=False)
+result = tensor_parallel(args.iterations, args.number_of_transformer_layers, n_iter_grad_sync, warmup=False)
 
 if rank == 0:
+    print(f"SP Value = {SP}")
+    print(f"TP Degree = {TP}")
+    print(f"Shape of the (Q,K,V) atten. matrix = {attn_W_QKV.shape}")
+    print(f"Shape of the WO atten. matrix = {attn_WO.shape}")
+    print(f"Shape of the Weight matrix (H --> 4H)= {mat_h_4h.shape}")
+    print(f"Shape of the Weight matrix (4H --> H)= {mat_4h_h.shape}")
     print(result[0]["T_allgather_1"].shape)
     print(result[0]["T_QKV"].shape)
     print(result[1]["T_allgather_1"].shape)
@@ -471,37 +469,34 @@ if rank == 0:
     print(f"N_iter_grad_sync = {n_iter_grad_sync}")
     print(result[2].shape)
     print(f"First allgather total times from timing loop = {result[1]['T_allgather_1']}")
+    print(f"First reduce scatter total times from timing loop = {result[1]['T_reduce_scatter_1']}")
     print(f"First allreduce total times from timing loop = {result[1]['T_allreduce_1']}")
+    print(f"Attention  W_QKV matrix multiplication total times from timing loop = {result[1]['T_QKV']}")
+    print(f"Attention  WO matrix multiplication total times from timing loop = {result[1]['T_WO']}")
     print(f"Grad Sync Total times from timing loop = {result[1]['T_grad_sync']}")
     print(f"Timing loop times = {result[1]['T_timing_loop']}")
-    print(f"SP Value = {SP}")
-    print(f"TP Degree = {TP}")
-    #print(f"Shape of the (Q,K,V) atten. matrix = {mm1.shape}")
-    #print(f"Shape of the W_0 atten. matrix = {mm2.shape}")
-    #print(f"Shape of the Weight matrix (H --> 4H)= {mm3.shape}")
-    #print(f"Shape of the Weight matrix (4H --> H)= {mm4.shape}")
     #print(f"Shape of the Input after (Q,K,V) atten. matrix = {interim1.shape}")
-    #print(f"Shape of the Input after W_0 atten. matrix = {interim2.shape}")
+    #print(f"Shape of the Input after WO atten. matrix = {interim2.shape}")
     #print(f"Shape of the Input after Weight matrix (H --> 4H)= {interim3.shape}")
     #print(f"Shape of the Input after Weight matrix (4H --> H)= {interim4.shape}")
     ###############################################
-    #print(f"First Allgather for SP total time = {time0 * 1000} ms")
+    #print(f"First Allgather for SP total time = {time0 / 1e6 } ms")
     #print(f"First Allgather for SP total time = {T0_timing_loop[warmup]} ms")
-    #print(f"Column parallel Attention matrix multiplication total time = {time1 * 1000} ms")
+    #print(f"Column parallel Attention matrix multiplication total time = {time1 / 1e6 } ms")
     #print(f"Column parallel Attention matrix multiplication total time = {T1_timing_loop[warmup]} ms")
-    #print(f"Row parallel Attention matrix multiplication total time = {time2 * 1000} ms")
+    #print(f"Row parallel Attention matrix multiplication total time = {time2 / 1e6 } ms")
     #print(f"Row parallel Attention matrix multiplication total time = {T2_timing_loop[warmup]} ms")
-    #print(f"First reduce-scatter for SP total time = {time3 * 1000} ms")
+    #print(f"First reduce-scatter for SP total time = {time3 / 1e6 } ms")
     #print(f"First reduce-scatter for SP total time = {T3_timing_loop[warmup]} ms")
-    #print(f"First Allreduce for TP total time = {time4 * 1000} ms")
+    #print(f"First Allreduce for TP total time = {time4 / 1e6 } ms")
     #print(f"First Allreduce for TP total time = {T4_timing_loop[warmup]} ms")
-    #print(f"Second Allgather for SP total time = {time5 * 1000} ms")
+    #print(f"Second Allgather for SP total time = {time5 / 1e6 } ms")
     #print(f"Second Allgather for SP total time = {T5_timing_loop[warmup]} ms")
-    #print(f"H --> 4H matrix multiplication total time = {time6 * 1000} ms")
-    #print(f"4H --> H matrix multiplication total time = {time7 * 1000} ms")
-    #print(f"Second reduce-scatter for SP total time = {time8 * 1000} ms")
-    #print(f"Second Allreduce for TP total time = {time9 * 1000} ms")
-    #print(f"Grad Sync Allreduce over DP groups total time = {time10 * 1000} ms")
+    #print(f"H --> 4H matrix multiplication total time = {time6 / 1e6 } ms")
+    #print(f"4H --> H matrix multiplication total time = {time7 / 1e6 } ms")
+    #print(f"Second reduce-scatter for SP total time = {time8 / 1e6 } ms")
+    #print(f"Second Allreduce for TP total time = {time9 / 1e6 } ms")
+    #print(f"Grad Sync Allreduce over DP groups total time = {time10 / 1e6 } ms")
     #print(f"H --> 4H matrix multiplication total time = {T6_timing_loop[warmup]} ms")
     #print(f"4H --> H matrix multiplication total time = {T7_timing_loop[warmup]} ms")
     #print(f"Second reduce-scatter for SP total time = {T8_timing_loop[warmup]} ms")
