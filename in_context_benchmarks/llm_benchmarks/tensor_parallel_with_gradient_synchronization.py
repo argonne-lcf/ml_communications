@@ -66,209 +66,12 @@ if args.device == "xpu":
     import intel_extension_for_pytorch as ipex
     import oneccl_bindings_for_pytorch
 
-def synchronize(device):
-    if device == "cuda":
-        return torch.cuda.synchronize()
-    elif device == "xpu":
-        return torch.xpu.synchronize()
-    else:
-        raise NotImplementedError("This method is not implemented yet.")
-        return None
-
-def get_device_string(device):
-    if device == "cuda": 
-        return f"cuda:{torch.cuda.current_device()}" 
-    elif device == "xpu":
-        
-        return f"xpu:{torch.xpu.current_device()}" 
-    else:
-        raise NotImplementedError("This method is not implemented yet.")
-        return None
-
-def get_device_count(device):
-    if device == "cuda":
-        return torch.cuda.device_count() 
-    elif device == "xpu":
-        return torch.xpu.device_count() 
-    else:
-        raise NotImplementedError("This method is not implemented yet.")
-        return None
-
-def set_device(visible_device):
-    if args.device == "cuda":
-        return torch.cuda.set_device(visible_device)
-    elif args.device == "xpu":
-        return torch.xpu.set_device(visible_device)
-    else:
-        raise NotImplementedError("This method is not implemented yet.")
-        return None
-
-def get_backend(device):
-    if device =="cuda":
-        return "nccl"
-    elif device == "xpu":
-        return "ccl"
-    else:
-        raise NotImplementedError("This method is not implemented yet.")
-        return None
-
-rank = int(MPI.COMM_WORLD.Get_rank())
-world_size = int(MPI.COMM_WORLD.Get_size())
-
-if args.logging:
-    if rank == 0 and not os.path.exists(log_directory):
-        # Create log directory if it doesn't exist
-        os.makedirs(log_directory)
-
-    MPI.COMM_WORLD.Barrier()
-    logging.basicConfig(filename=log_filepath, filemode="a", level="INFO")
-else:
-    logging.basicConfig(level="INFO")
-
-print(f"rank {rank}/{world_size}")
-#device_count = torch.xpu.device_count()
-#device_count = int(os.environ["NGPU_PER_HOST"])
-
-visible_device = rank % get_device_count(args.device)
-local_rank = visible_device
-set_device(visible_device)
-
-#os.environ['CCL_LOCAL_RANK'] = str(device)
-#os.environ['CCL_LOCAL_SIZE'] = str(device_count)
-#backend = "ccl"
-
-if rank == 0:
-   master_addr              = socket.gethostname()
-   sock                     = socket.socket()
-   sock.bind(('',0))
-   # master_port  = sock.getsockname()[1]
-   master_port              = 2345
-else:
-   master_addr              = None
-   master_port              = None
-
-master_addr                 = MPI.COMM_WORLD.bcast(master_addr, root=0)
-master_port                 = MPI.COMM_WORLD.bcast(master_port, root=0)
-os.environ["MASTER_ADDR"]   = master_addr
-os.environ["MASTER_PORT"]   = str(master_port)
-
-#torch.xpu.set_device(device)
-torch.distributed.init_process_group(
-    backend=get_backend(args.device),
-    init_method="env://",
-    world_size=world_size,
-    rank=rank,
-)
-
 if args.precision == "float32":
     data_type = torch.float32
     data_type_multiplier = 32 ## 32 Bits = 4 Bytes
 elif args.precision == "bfloat16":
     data_type = torch.bfloat16
     data_type_multiplier = 16 ## 16 Bits
-
-TP = args.tensor_parallel_degree
-
-def get_tp_group(TP, world_size):
-    tp_group=None
-    for i in range(world_size//TP):
-        ranks = [j for j in range(i*TP,(i+1)*TP)]
-        if rank==0:
-            print("TP group", ranks)
-        group = torch.distributed.new_group(ranks)
-        if rank in ranks:
-            tp_group=group
-    return tp_group
-
-if TP is not None:
-    tp_group = get_tp_group(TP, world_size)
-else:
-    TP = 1
-    tp_group = get_tp_group(TP, world_size)
-
-"""
- 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11
-12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23
-24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35
-36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47 """
-
-dp_switch = args.data_parallel_switch
-dp_group = None
-
-if dp_switch:
-    for i in range(TP):
-        ranks = [i for i in range(i,world_size,TP)]
-        if rank==0:
-            print("DP group", ranks)
-        group = torch.distributed.new_group(ranks)
-        if rank in ranks:
-            dp_group=group
-else:
-    ranks = [i for i in range(0,world_size,TP)]
-    dp_group = torch.distributed.new_group(ranks)
-    if rank==0:
-        print("DP group", ranks)
-
-"""
-0,12,24,36
-1,13,25,37
-...
-"""
-
-S = args.sequence_length #4608 #4608 sequence length
-H = args.hidden_dimension #9216 #9216 hidden dimension
-M = 1
-all_gather_buffer = torch.zeros([S, M, H], dtype=data_type, device=get_device_string(args.device))
-SP=args.sequence_parallel_switch
-
-if SP:
-    partial_input = torch.rand([S//TP, M, H], dtype=data_type, device=get_device_string(args.device))
-    input = torch.zeros([S, M, H], dtype=data_type, device=get_device_string(args.device))
-    partial_interim2 = torch.zeros([S//TP, M, H], dtype=data_type, device=get_device_string(args.device))
-    partial_interim4 = torch.zeros([S//TP, M, H], dtype=data_type, device=get_device_string(args.device)) 
-else:
-    input = torch.rand([S, M, H], dtype=data_type, device=get_device_string(args.device))
-#print(f"Input shape = {input.shape}")
-attn_W_QKV = torch.rand(
-        H//TP,
-        H,
-        device=get_device_string(args.device),
-        dtype=data_type,
-    )*1e-4
-
-attn_WO = torch.rand(
-        H,
-        H//TP,
-        device=get_device_string(args.device),
-        dtype=data_type,
-    )*1e-3
-
-mat_h_4h = torch.rand(
-        4*H//TP,
-        H,
-        device=get_device_string(args.device),
-        dtype=data_type,
-    )*1e-4
-mat_4h_h = torch.rand(
-        H,
-        4*H//TP,
-        device=get_device_string(args.device),
-        dtype=data_type,
-    )*1e-3
-
-n_layers = args.number_of_transformer_layers
-number_of_total_parameters = ((attn_W_QKV.shape[0]*attn_W_QKV.shape[1] + attn_WO.shape[0]*attn_WO.shape[1] +  mat_h_4h.shape[0]*mat_h_4h.shape[1] +  mat_4h_h.shape[0]*mat_4h_h.shape[1]) * n_layers)
-#print(f"Parameters = {number_of_total_parameters / 1e9} Billions")
-
-# number of iterations for the gradient synchronization loop
-
-highest_bucket_size = int(args.grad_allreduce_bucket)
-n_iter_grad_sync = math.ceil(number_of_total_parameters / highest_bucket_size)
-
-allreduce_grad = torch.rand([highest_bucket_size], dtype=data_type, device=get_device_string(args.device))
-
-if rank==0:
-    print("start loop", flush=True)
 
 def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync, warmup=False):
     # Define how many variables you want
@@ -451,6 +254,202 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync, warmup=False):
         timing_loop_time += (timing_loop_end_time - timing_loop_start_time)
         timing_loop_start_time = timing_loop_end_time
     return T_dict_individual, T_dict_total, T_grad_sync_individual
+
+rank = int(MPI.COMM_WORLD.Get_rank())
+world_size = int(MPI.COMM_WORLD.Get_size())
+
+def synchronize(device):
+    if device == "cuda":
+        return torch.cuda.synchronize()
+    elif device == "xpu":
+        return torch.xpu.synchronize()
+    else:
+        raise NotImplementedError("This method is not implemented yet.")
+        return None
+
+def get_device_string(device):
+    if device == "cuda": 
+        return f"cuda:{torch.cuda.current_device()}" 
+    elif device == "xpu":
+        
+        return f"xpu:{torch.xpu.current_device()}" 
+    else:
+        raise NotImplementedError("This method is not implemented yet.")
+        return None
+
+def get_device_count(device):
+    if device == "cuda":
+        return torch.cuda.device_count() 
+    elif device == "xpu":
+        return torch.xpu.device_count() 
+    else:
+        raise NotImplementedError("This method is not implemented yet.")
+        return None
+
+def set_device(visible_device):
+    if args.device == "cuda":
+        return torch.cuda.set_device(visible_device)
+    elif args.device == "xpu":
+        return torch.xpu.set_device(visible_device)
+    else:
+        raise NotImplementedError("This method is not implemented yet.")
+        return None
+
+def get_backend(device):
+    if device =="cuda":
+        return "nccl"
+    elif device == "xpu":
+        return "ccl"
+    else:
+        raise NotImplementedError("This method is not implemented yet.")
+        return None
+
+if args.logging:
+    if rank == 0 and not os.path.exists(log_directory):
+        # Create log directory if it doesn't exist
+        os.makedirs(log_directory)
+
+    MPI.COMM_WORLD.Barrier()
+    logging.basicConfig(filename=log_filepath, filemode="a", level="INFO")
+else:
+    logging.basicConfig(level="INFO")
+
+print(f"rank {rank}/{world_size}")
+#device_count = torch.xpu.device_count()
+#device_count = int(os.environ["NGPU_PER_HOST"])
+
+visible_device = rank % get_device_count(args.device)
+local_rank = visible_device
+set_device(visible_device)
+
+#os.environ['CCL_LOCAL_RANK'] = str(device)
+#os.environ['CCL_LOCAL_SIZE'] = str(device_count)
+#backend = "ccl"
+
+if rank == 0:
+   master_addr              = socket.gethostname()
+   sock                     = socket.socket()
+   sock.bind(('',0))
+   # master_port  = sock.getsockname()[1]
+   master_port              = 2345
+else:
+   master_addr              = None
+   master_port              = None
+
+master_addr                 = MPI.COMM_WORLD.bcast(master_addr, root=0)
+master_port                 = MPI.COMM_WORLD.bcast(master_port, root=0)
+os.environ["MASTER_ADDR"]   = master_addr
+os.environ["MASTER_PORT"]   = str(master_port)
+
+#torch.xpu.set_device(device)
+torch.distributed.init_process_group(
+    backend=get_backend(args.device),
+    init_method="env://",
+    world_size=world_size,
+    rank=rank,
+)
+
+TP = args.tensor_parallel_degree
+
+def get_tp_group(TP, world_size):
+    tp_group=None
+    for i in range(world_size//TP):
+        ranks = [j for j in range(i*TP,(i+1)*TP)]
+        if rank==0:
+            print("TP group", ranks)
+        group = torch.distributed.new_group(ranks)
+        if rank in ranks:
+            tp_group=group
+    return tp_group
+
+if TP is not None:
+    tp_group = get_tp_group(TP, world_size)
+else:
+    TP = 1
+    tp_group = get_tp_group(TP, world_size)
+
+"""
+ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11
+12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23
+24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35
+36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47 """
+
+dp_switch = args.data_parallel_switch
+dp_group = None
+
+if dp_switch:
+    for i in range(TP):
+        ranks = [i for i in range(i,world_size,TP)]
+        if rank==0:
+            print("DP group", ranks)
+        group = torch.distributed.new_group(ranks)
+        if rank in ranks:
+            dp_group=group
+else:
+    ranks = [i for i in range(0,world_size,TP)]
+    dp_group = torch.distributed.new_group(ranks)
+    if rank==0:
+        print("DP group", ranks)
+
+"""
+0,12,24,36
+1,13,25,37
+...
+"""
+S = args.sequence_length #4608 #4608 sequence length
+H = args.hidden_dimension #9216 #9216 hidden dimension
+M = 1
+all_gather_buffer = torch.zeros([S, M, H], dtype=data_type, device=get_device_string(args.device))
+SP=args.sequence_parallel_switch
+
+if SP:
+    partial_input = torch.rand([S//TP, M, H], dtype=data_type, device=get_device_string(args.device))
+    input = torch.zeros([S, M, H], dtype=data_type, device=get_device_string(args.device))
+    partial_interim2 = torch.zeros([S//TP, M, H], dtype=data_type, device=get_device_string(args.device))
+    partial_interim4 = torch.zeros([S//TP, M, H], dtype=data_type, device=get_device_string(args.device)) 
+else:
+    input = torch.rand([S, M, H], dtype=data_type, device=get_device_string(args.device))
+#print(f"Input shape = {input.shape}")
+attn_W_QKV = torch.rand(
+        H//TP,
+        H,
+        device=get_device_string(args.device),
+        dtype=data_type,
+    )*1e-4
+
+attn_WO = torch.rand(
+        H,
+        H//TP,
+        device=get_device_string(args.device),
+        dtype=data_type,
+    )*1e-3
+
+mat_h_4h = torch.rand(
+        4*H//TP,
+        H,
+        device=get_device_string(args.device),
+        dtype=data_type,
+    )*1e-4
+mat_4h_h = torch.rand(
+        H,
+        4*H//TP,
+        device=get_device_string(args.device),
+        dtype=data_type,
+    )*1e-3
+
+n_layers = args.number_of_transformer_layers
+number_of_total_parameters = ((attn_W_QKV.shape[0]*attn_W_QKV.shape[1] + attn_WO.shape[0]*attn_WO.shape[1] +  mat_h_4h.shape[0]*mat_h_4h.shape[1] +  mat_4h_h.shape[0]*mat_4h_h.shape[1]) * n_layers)
+#print(f"Parameters = {number_of_total_parameters / 1e9} Billions")
+
+# number of iterations for the gradient synchronization loop
+
+highest_bucket_size = int(args.grad_allreduce_bucket)
+n_iter_grad_sync = math.ceil(number_of_total_parameters / highest_bucket_size)
+
+allreduce_grad = torch.rand([highest_bucket_size], dtype=data_type, device=get_device_string(args.device))
+
+if rank==0:
+    print("start loop", flush=True)
 
 tensor_parallel(args.warmup_iterations, args.number_of_transformer_layers, n_iter_grad_sync, warmup=True)
 result = tensor_parallel(args.iterations, args.number_of_transformer_layers, n_iter_grad_sync, warmup=False)
