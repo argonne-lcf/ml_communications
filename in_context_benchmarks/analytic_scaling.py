@@ -41,10 +41,11 @@ def get_num_param_per_layer(h, h_):
     '''
         Ignored bias and norm layers. Probably insignificant. Can be added later
         ## layer_norm =  seq * h
+        LLM includes: 2 * h * vocab_size (look up table and Linear head)
     '''
     QKVO = h * 4*h
     FFNN = 2 * h * h_
-    return (QKV + FFNN)
+    return (QKVO + FFNN)
 
 # def get_total_num_param(h, h_):
 #     return l * get_num_param_per_layer(h, h_)
