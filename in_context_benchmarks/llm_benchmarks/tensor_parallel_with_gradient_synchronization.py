@@ -85,7 +85,8 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync, warmup=False):
 
     TensorParallelResults = namedtuple("TensorParallelResults",
                                        ["T_dict_individual", "T_dict_total",
-                                        "T_grad_sync_individual"])
+                                        "T_grad_sync_individual", "interim4",
+                                        "allreduce_grad"])
  
     #N_timing_loop = args.number_of_timing_loops 
     for m in range(N_timing_loop):
@@ -257,7 +258,7 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync, warmup=False):
         timing_loop_time += (timing_loop_end_time - timing_loop_start_time)
         timing_loop_start_time = timing_loop_end_time
     #return T_dict_individual, T_dict_total, T_grad_sync_individual
-    return TensorParallelResults(T_dict_individual, T_dict_total, T_grad_sync_individual)
+    return TensorParallelResults(T_dict_individual, T_dict_total, T_grad_sync_individual, interim4, allreduce_grad)
 
 rank = int(MPI.COMM_WORLD.Get_rank())
 world_size = int(MPI.COMM_WORLD.Get_size())
@@ -408,34 +409,34 @@ all_gather_buffer = torch.zeros([S, M, H], dtype=data_type, device=get_device_st
 SP=args.sequence_parallel_switch
 
 if SP:
-    partial_input = torch.rand([S//TP, M, H], dtype=data_type, device=get_device_string(args.device))
-    input = torch.zeros([S, M, H], dtype=data_type, device=get_device_string(args.device))
+    partial_input = torch.ones([S//TP, M, H], dtype=data_type, device=get_device_string(args.device))
+    input = torch.ones([S, M, H], dtype=data_type, device=get_device_string(args.device))
     partial_interim2 = torch.zeros([S//TP, M, H], dtype=data_type, device=get_device_string(args.device))
     partial_interim4 = torch.zeros([S//TP, M, H], dtype=data_type, device=get_device_string(args.device)) 
 else:
-    input = torch.rand([S, M, H], dtype=data_type, device=get_device_string(args.device))
+    input = torch.ones([S, M, H], dtype=data_type, device=get_device_string(args.device))
 #logging.info(f"Input shape = {input.shape}")
-attn_W_QKV = torch.rand(
+attn_W_QKV = torch.ones(
         H//TP,
         H,
         device=get_device_string(args.device),
         dtype=data_type,
     )*1e-4
 
-attn_WO = torch.rand(
+attn_WO = torch.ones(
         H,
         H//TP,
         device=get_device_string(args.device),
         dtype=data_type,
     )*1e-3
 
-mat_h_4h = torch.rand(
+mat_h_4h = torch.ones(
         4*H//TP,
         H,
         device=get_device_string(args.device),
         dtype=data_type,
     )*1e-4
-mat_4h_h = torch.rand(
+mat_4h_h = torch.ones(
         H,
         4*H//TP,
         device=get_device_string(args.device),
@@ -451,7 +452,7 @@ number_of_total_parameters = ((attn_W_QKV.shape[0]*attn_W_QKV.shape[1] + attn_WO
 highest_bucket_size = int(args.grad_allreduce_bucket)
 n_iter_grad_sync = math.ceil(number_of_total_parameters / highest_bucket_size)
 
-allreduce_grad = torch.rand([highest_bucket_size], dtype=data_type, device=get_device_string(args.device))
+allreduce_grad = torch.zeros([highest_bucket_size], dtype=data_type, device=get_device_string(args.device))
 
 if rank==0:
     logging.info("start loop")
@@ -462,6 +463,8 @@ result = tensor_parallel(args.iterations, args.number_of_transformer_layers, n_i
 T_dict_individual = result.T_dict_individual
 T_dict_total = result.T_dict_total
 T_grad_sync_individual = result.T_grad_sync_individual
+interim4 = result.interim4
+allreduce_grad_after = result.allreduce_grad
 
 tp_allreduce_data_volume = (args.sequence_length * args.hidden_dimension * data_type_multiplier * n_layers * 2 * args.iterations) 
 sp_allgather_data_volume = (args.sequence_length * data_type_multiplier * n_layers * 2 * args.iterations) 
@@ -476,6 +479,8 @@ if rank == 0:
     logging.info(f"SP Value = {SP}")
     logging.info(f"TP Degree = {TP}") 
     logging.info("==== List of Arguments ====")
+    logging.info("Input mean before operations = {input_mean:4f}".format(input_mean=input.mean()))
+    logging.info("Result mean after all  operations = {output_mean:4f}".format(output_mean=interim4.mean()))
     logging.info(f"Allgather buffer size = {(args.sequence_length * data_type_multiplier) / 8 / 1e6} MB")
     logging.info(f"Grad Sync Allreduce bucket size = {(highest_bucket_size * data_type_multiplier) / 8 / 1e6} MB") 
     logging.info(f"DP Allreduce Throughput = {((highest_bucket_size * data_type_multiplier) / (sum(T_dict_total['T_grad_sync']))) / 8 / 1e9} MB/s")
