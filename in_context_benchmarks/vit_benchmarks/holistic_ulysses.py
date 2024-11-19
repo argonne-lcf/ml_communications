@@ -11,6 +11,15 @@ import torch.nn.functional as F
 import torch.distributed as dist
 import time
 
+## TBD
+# class All2All(torch.autograd.Function):
+#     def forward(ctx, gather, scatter):
+
+
+#     def backward():
+
+# def all2all_single():
+
 class DistributedMLP(nn.Module):
     def __init__(self, emb_dim, num_layers):
         super().__init__()

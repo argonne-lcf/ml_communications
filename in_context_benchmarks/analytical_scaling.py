@@ -3,7 +3,7 @@ import argparse
 
 ## TODO: Implement combination of different parallelisms
 ## TODO: Implement head count asserts for ulysses, TP, etc. 
-## TODO: We get 53B not 70B. Reconcile this? Layernorm, swiglu, etc. Does this also suggest that our TFlop formula is also underestimated? 
+## TODO: We get 59B not 80B. How to reconcile this(Layernorm, swiglu, etc.)? Does this also suggest that our TFlop formula is also underestimated?
 ## TODO: Implement peak memory size. Also memory saving compared to DP?
 
 ## Lamma 70B
@@ -99,29 +99,27 @@ def get_async_comm_size_per_layer(h, h_):
     DP = 2 * MSG / P * (P-1)
 
     ## ZERO
+    ## Zero is a bit nuanced, some comm are completely async while some have to be finished before next layer
     ZERO1 = ZERO2 = DP ## same as argued in the paper: https://www.microsoft.com/en-us/research/blog/zero-deepspeed-new-system-optimizations-enable-training-models-with-over-100-billion-parameters/
     ZERO3 = 1.5 * ZERO1 ## extra all-gather of parameters during backward
 
-    ## TODO: MICS
+    ## TODO: MICS / ZERO++
 
     return DP, ZERO1, ZERO2, ZERO3
 
-## Zero is a bit nuanced, if Zero1 then there is this fwd and bwd all-gathers that we need to do asynchrnoulsy
-
-
-## Q. Does everyone use mixed-precision always now? 
-
 if __name__ == "__main__":
-    num_flops_per_layer = round(get_num_flop_per_layer(B, s, h, h_) / 1_000_000_000_000, 2)
-    num_param_per_layer = get_num_param_per_layer(h, h_) // 1_000_000
+    num_flops_per_layer = round(get_num_flop_per_layer(B, s, h, h_) / 1000**4, 2)
+    num_param_per_layer = round(get_num_param_per_layer(h, h_) / 1000**2, 2)
+    total_num_param = round(get_num_param_per_layer(h, h_) * l / 1000**3, 2)
     
-    print("\nAssuming Mixed-Precision ON")
+    print(f"\n")
+    print("Assuming Mixed-Precision ON") ## Q. Does everyone use mixed-precision always now? 
     float_byte = 2 
-    SPU_comm, TP_comm, TPSP_comm = [round(comm * float_byte / 1_000_000_000, 2) for comm in get_comm_size_per_layer(B, s, h, P)]
-    DP, ZERO1, ZERO2, ZERO3 = [round(async_comm * float_byte / 1_000_000_000, 2) for async_comm in get_async_comm_size_per_layer(h, h_)]
+    SPU_comm, TP_comm, TPSP_comm = [round(comm * float_byte / 1000**3, 2) for comm in get_comm_size_per_layer(B, s, h, P)]
+    DP, ZERO1, ZERO2, ZERO3 = [round(async_comm * float_byte / 1000**3, 2) for async_comm in get_async_comm_size_per_layer(h, h_)]
 
     print(f"num params per layer (M): {num_param_per_layer}")
-    print(f"total num params (M): {num_param_per_layer * l}")
+    print(f"total num params (B): {total_num_param}")
     print(f"Tflop count per layer (fp16): {num_flops_per_layer}")
     # print(f"total Tflop count: {num_flops_per_layer * l}")
     print(f"\n")
@@ -138,3 +136,5 @@ if __name__ == "__main__":
     print(f"    DP/SP + ZERO2: {ZERO2}")
     print(f"    DP/SP + ZERO3: {ZERO3}")
     print(f"\n")
+
+    
