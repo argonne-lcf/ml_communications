@@ -66,6 +66,7 @@ def get_comm_size_per_layer(B, s, h, P):
     '''
         P: model parallelism degree
         return comm size per Transformer layer (att + FFNN)
+        ## NOTE: we compute the total message size across the entire system not buffer size per GPU. 
 
         Comm Formulas:
         All-Reduce (Ring-Algorithm) = 2 * MSG / P * (P-1) 
@@ -76,17 +77,18 @@ def get_comm_size_per_layer(B, s, h, P):
     ## SPU
     # 4 all2all (2fwd + 2bwd)
     # divided by P because data is constantly partitioned
-    qkv_all2all = B * s/P * 3 * h ## [B, s, 3 * h]
-    att_out_all2all = B * s/P * h ## [B, s, h]
-    SPU_comm = 2 * (qkv_all2all + att_out_all2all) / P * (P-1) ## Keep one partition for yourself
+    qkv_all2all = B * s/P * 3 * h ## [B, s, 3 * h] - buffer size
+    att_out_all2all = B * s/P * h ## [B, s, h] 
+    SPU_comm = (qkv_all2all + att_out_all2all) * (P-1) ## Keep one partition for yourself
+                                                       ## / P cancels out as Message Size = buffer * P
 
     ## SPR
     ## TODO
 
     ## TP
     # 4 all-reduce (2fwd + 2bwd)
-    allreduce = B * s * h / P * (P-1) ## identical for att_out and MLP_out
-    TP_comm = 4 * allreduce
+    allreduce = B * s * h  ## identical for att_out and MLP_out
+    TP_comm = 8 * allreduce * (P-1) ## / P cancels out, 8 = num_all_reduce * all_reduce_cost_coeff
 
     ## TP-SP
     TPSP_comm = TP_comm ## Same comm size as argued in the Sequence Parallelism paper: https://arxiv.org/pdf/2309.14509
@@ -95,11 +97,11 @@ def get_comm_size_per_layer(B, s, h, P):
 
 def get_async_comm_size_per_layer(h, h_):
     ## DP
-    MSG = get_num_param_per_layer(h, h_)
-    DP = 2 * MSG / P * (P-1)
+    grad_buffer = get_num_param_per_layer(h, h_)
+    DP = 2 * grad_buffer * (P-1) ## / P cancels out
 
     ## ZERO
-    ## Zero is a bit nuanced, some comm are completely async while some have to be finished before next layer
+    ## Zero is a bit nuanced, some comm are completely async while some are async only per layer
     ZERO1 = ZERO2 = DP ## same as argued in the paper: https://www.microsoft.com/en-us/research/blog/zero-deepspeed-new-system-optimizations-enable-training-models-with-over-100-billion-parameters/
     ZERO3 = 1.5 * ZERO1 ## extra all-gather of parameters during backward
 
