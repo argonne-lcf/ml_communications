@@ -452,7 +452,7 @@ number_of_total_parameters = ((attn_W_QKV.shape[0]*attn_W_QKV.shape[1] + attn_WO
 highest_bucket_size = int(args.grad_allreduce_bucket)
 n_iter_grad_sync = math.ceil(number_of_total_parameters / highest_bucket_size)
 
-allreduce_grad = torch.zeros([highest_bucket_size], dtype=data_type, device=get_device_string(args.device))
+allreduce_grad = torch.ones([highest_bucket_size], dtype=data_type, device=get_device_string(args.device))
 
 if rank==0:
     logging.info("start loop")
@@ -466,8 +466,8 @@ T_grad_sync_individual = result.T_grad_sync_individual
 interim4 = result.interim4
 allreduce_grad_after = result.allreduce_grad
 
-tp_allreduce_data_volume = (args.sequence_length * args.hidden_dimension * data_type_multiplier * n_layers * 2 * args.iterations) 
-sp_allgather_data_volume = (args.sequence_length * data_type_multiplier * n_layers * 2 * args.iterations) 
+tp_allreduce_data_volume = (args.sequence_length * args.hidden_dimension * data_type_multiplier * 2 ) ## As there are 2 allreduces per iteration / per layer
+sp_allgather_data_volume = (args.sequence_length * data_type_multiplier * 2 ) ## As there are 2 allgathers per iterations / per layer 
 
 if rank == 0:
     logging.info(f"==== Main Results ====\n")
@@ -483,12 +483,13 @@ if rank == 0:
     logging.info("Result mean after all  operations = {output_mean:4f}".format(output_mean=interim4.mean()))
     logging.info(f"Allgather buffer size = {(args.sequence_length * data_type_multiplier) / 8 / 1e6} MB")
     logging.info(f"Grad Sync Allreduce bucket size = {(highest_bucket_size * data_type_multiplier) / 8 / 1e6} MB") 
-    logging.info(f"DP Allreduce Throughput = {((highest_bucket_size * data_type_multiplier) / (sum(T_dict_total['T_grad_sync']))) / 8 / 1e9} MB/s")
+    logging.info(f"DP Allreduce Throughput = {(((highest_bucket_size * data_type_multiplier) / 8) / (T_grad_sync_individual[0,0])) * 1e3} MB/s")
     if SP:
-        logging.info(f"SP Allgather Throughput = {(sp_allgather_data_volume / (sum(T_dict_total['T_allgather_1'])+sum(T_dict_total['T_allgather_2']))) / 8 / 1e9} MB/s")
-        logging.info(f"SP Reduce-Scatter Throughput = {(sp_allgather_data_volume / (sum(T_dict_total['T_reduce_scatter_1'])+sum(T_dict_total['T_reduce_scatter_2']))) / 8 / 1e9} MB/s")
+        logging.info(f"SP Allgather Throughput = {((sp_allgather_data_volume / 8) / (sum(T_dict_total['T_allgather_1'])+sum(T_dict_total['T_allgather_2']))) *  1e3} MB/s")
+        logging.info(f"SP Reduce-Scatter Throughput = {((sp_allgather_data_volume / 8) / (sum(T_dict_total['T_reduce_scatter_1'])+sum(T_dict_total['T_reduce_scatter_2']))) * 1e3} MB/s")
     else:
-        logging.info(f"TP Allreduce Throughput = {(tp_allreduce_data_volume / (sum(T_dict_total['T_allreduce_1'])+sum(T_dict_total['T_allreduce_2']))) / 8 / 1e9} MB/s")
+        logging.info(f"TP Allreduce data volume per layer per iteration = {(tp_allreduce_data_volume ) / 8 / 1e6} MB")
+        logging.info(f"TP Allreduce Throughput per layer per iteration = {((tp_allreduce_data_volume / 8 ) / (T_dict_individual['T_allreduce_1'][0][0]+T_dict_individual['T_allreduce_2'][0][0])) * 1e3} MB/s")
     logging.info(f"Shape of the (Q,K,V) atten. matrix = {attn_W_QKV.shape}")
     logging.info(f"Shape of the WO atten. matrix = {attn_WO.shape}")
     logging.info(f"Shape of the Weight matrix (H --> 4H)= {mat_h_4h.shape}")
