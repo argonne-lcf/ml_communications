@@ -85,7 +85,7 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync, warmup=False):
 
     TensorParallelResults = namedtuple("TensorParallelResults",
                                        ["T_dict_individual", "T_dict_total",
-                                        "T_grad_sync_individual", "interim4",
+                                        "T_grad_sync_individual", "interim2", "interim4",
                                         "allreduce_grad"])
  
     #N_timing_loop = args.number_of_timing_loops 
@@ -258,7 +258,7 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync, warmup=False):
         timing_loop_time += (timing_loop_end_time - timing_loop_start_time)
         timing_loop_start_time = timing_loop_end_time
     #return T_dict_individual, T_dict_total, T_grad_sync_individual
-    return TensorParallelResults(T_dict_individual, T_dict_total, T_grad_sync_individual, interim4, allreduce_grad)
+    return TensorParallelResults(T_dict_individual, T_dict_total, T_grad_sync_individual, interim2, interim4, allreduce_grad)
 
 rank = int(MPI.COMM_WORLD.Get_rank())
 world_size = int(MPI.COMM_WORLD.Get_size())
@@ -464,10 +464,16 @@ T_dict_individual = result.T_dict_individual
 T_dict_total = result.T_dict_total
 T_grad_sync_individual = result.T_grad_sync_individual
 interim4 = result.interim4
+interim2 = result.interim2
 allreduce_grad_after = result.allreduce_grad
 
-tp_allreduce_data_volume = (args.sequence_length * args.hidden_dimension * data_type_multiplier * 2 ) ## As there are 2 allreduces per iteration / per layer
-sp_allgather_data_volume = (args.sequence_length * data_type_multiplier * 2 ) ## As there are 2 allgathers per iterations / per layer 
+#tp_allreduce_data_volume = (args.sequence_length * args.hidden_dimension * data_type_multiplier)
+#sp_allgather_data_volume = (args.sequence_length * data_type_multiplier)
+
+tp_allreduce_1_data_volume = (interim2.shape[0] * interim2.shape[-1] * data_type_multiplier)
+tp_allreduce_2_data_volume = (interim4.shape[0] * interim4.shape[-1] * data_type_multiplier)
+
+sp_allgather_data_volume = ((TP - 1) * (args.sequence_length // TP) * args.hidden_dimension * data_type_multiplier) 
 
 if rank == 0:
     logging.info(f"==== Main Results ====\n")
@@ -481,21 +487,63 @@ if rank == 0:
     logging.info("==== List of Arguments ====")
     logging.info("Input mean before operations = {input_mean:4f}".format(input_mean=input.mean()))
     logging.info("Result mean after all  operations = {output_mean:4f}".format(output_mean=interim4.mean()))
+    logging.info(f"Interim 2 Size = {interim2.shape}")
+    logging.info(f"Interim 4 Size = {interim4.shape}")
     logging.info(f"Allgather buffer size = {(args.sequence_length * data_type_multiplier) / 8 / 1e6} MB")
     logging.info(f"Grad Sync Allreduce bucket size = {(highest_bucket_size * data_type_multiplier) / 8 / 1e6} MB") 
     logging.info(f"DP Allreduce Throughput = {(((highest_bucket_size * data_type_multiplier) / 8) / (T_grad_sync_individual[0,0])) * 1e3} MB/s")
     if SP:
-        logging.info(f"SP Allgather Throughput = {((sp_allgather_data_volume / 8) / (sum(T_dict_total['T_allgather_1'])+sum(T_dict_total['T_allgather_2']))) *  1e3} MB/s")
-        logging.info(f"SP Reduce-Scatter Throughput = {((sp_allgather_data_volume / 8) / (sum(T_dict_total['T_reduce_scatter_1'])+sum(T_dict_total['T_reduce_scatter_2']))) * 1e3} MB/s")
+        logging.info(f"SP Allgather data volume per layer per iteration = {(sp_allgather_data_volume ) / 8 / 1e6} MB")
+        logging.info(f"SP Allgather 1 Max. Throughput = {((sp_allgather_data_volume / 8) / np.min(T_dict_individual['T_allgather_1'])) *  1e3} MB/s")
+        logging.info(f"SP Allgather 2 Max. Throughput = {((sp_allgather_data_volume / 8) / np.min(T_dict_individual['T_allgather_2'])) *  1e3} MB/s")
+        logging.info(f"SP Reduce-Scatter 1 Max. Throughput = {((sp_allgather_data_volume / 8) / np.min(T_dict_individual['T_reduce_scatter_1'])) * 1e3} MB/s")
+        logging.info(f"SP Reduce-Scatter 2 Max. Throughput = {((sp_allgather_data_volume / 8) / np.min(T_dict_individual['T_reduce_scatter_2'])) * 1e3} MB/s")
     else:
-        logging.info(f"TP Allreduce data volume per layer per iteration = {(tp_allreduce_data_volume ) / 8 / 1e6} MB")
-        logging.info(f"TP Allreduce Throughput per layer per iteration = {((tp_allreduce_data_volume / 8 ) / (T_dict_individual['T_allreduce_1'][0][0]+T_dict_individual['T_allreduce_2'][0][0])) * 1e3} MB/s")
+        logging.info(f"TP Allreduce 1 data volume per layer per iteration = {(tp_allreduce_1_data_volume ) / 8 / 1e6} MB")
+        logging.info(f"TP Allreduce 2 data volume per layer per iteration = {(tp_allreduce_2_data_volume ) / 8 / 1e6} MB")
+        logging.info(f"TP Allreduce 1 Max. Throughput per layer per iteration = {((tp_allreduce_1_data_volume / 8 ) / np.min(T_dict_individual['T_allreduce_1'])) * 1e3} MB/s")
+        logging.info(f"TP Allreduce 2 Max. Throughput per layer per iteration = {((tp_allreduce_2_data_volume / 8 ) / np.min(T_dict_individual['T_allreduce_2'])) * 1e3} MB/s")
     logging.info(f"Shape of the (Q,K,V) atten. matrix = {attn_W_QKV.shape}")
     logging.info(f"Shape of the WO atten. matrix = {attn_WO.shape}")
     logging.info(f"Shape of the Weight matrix (H --> 4H)= {mat_h_4h.shape}")
     logging.info(f"Shape of the Weight matrix (4H --> H)= {mat_4h_h.shape}")
     logging.info(f"Parameters (per rank) = {number_of_total_parameters / 1e9} Billions")
     logging.info(f"N_iter_grad_sync = {n_iter_grad_sync}")
+    logging.info("==== Timings per transformer layer ====")
+    logging.info("First Allgather for SP takes max. {max_time:.4f} ms,  min. {min_time:.4f} ms, avg. {avg_time:.4f} ms".format(max_time=np.max(T_dict_individual['T_allgather_1']/1e6), 
+    min_time=np.min(T_dict_individual['T_allgather_1']/1e6), avg_time=np.mean(T_dict_individual['T_allgather_1']/1e6)))
+    logging.info("Column Parallel Attention Matrix W_QKV multiplication takes max. {max_time:.4f} ms,  min. {min_time:.4f} ms, avg. {avg_time:.4f} ms"
+    .format(max_time=np.max(T_dict_individual['T_QKV']/1e6), 
+    min_time=np.min(T_dict_individual['T_QKV']/1e6), avg_time=np.mean(T_dict_individual['T_QKV']/1e6)))
+    logging.info("Row Parallel Attention Matrix WO multiplication takes max. {max_time:.4f} ms,  min. {min_time:.4f} ms, avg. {avg_time:.4f} ms"
+    .format(max_time=np.max(T_dict_individual['T_WO']/1e6), 
+    min_time=np.min(T_dict_individual['T_WO']/1e6), avg_time=np.mean(T_dict_individual['T_WO']/1e6)))
+    logging.info("First Reduce Scatter for SP takes max. {max_time:.4f} ms,  min. {min_time:.4f} ms, avg. {avg_time:.4f} ms"
+    .format(max_time=np.max(T_dict_individual['T_reduce_scatter_1']/1e6), 
+    min_time=np.min(T_dict_individual['T_reduce_scatter_1']/1e6), avg_time=np.mean(T_dict_individual['T_reduce_scatter_1']/1e6)))
+    logging.info("First Allreduce for TP takes max. {max_time:.4f} ms,  min. {min_time:.4f} ms, avg. {avg_time:.4f} ms"
+    .format(max_time=np.max(T_dict_individual['T_allreduce_1']/1e6), 
+    min_time=np.min(T_dict_individual['T_allreduce_1']/1e6), avg_time=np.mean(T_dict_individual['T_allreduce_1']/1e6)))
+    logging.info("Second Allgather for SP takes max. {max_time:.4f} ms,  min. {min_time:.4f} ms, avg. {avg_time:.4f} ms"
+    .format(max_time=np.max(T_dict_individual['T_allgather_2']/1e6), 
+    min_time=np.min(T_dict_individual['T_allgather_2']/1e6), avg_time=np.mean(T_dict_individual['T_allgather_2']/1e6)))
+    logging.info("H --> 4H Matrix multiplication takes max. {max_time:.4f} ms,  min. {min_time:.4f} ms, avg. {avg_time:.4f} ms"
+    .format(max_time=np.max(T_dict_individual['T_H_4H']/1e6), 
+    min_time=np.min(T_dict_individual['T_H_4H']/1e6), avg_time=np.mean(T_dict_individual['T_H_4H']/1e6)))
+    logging.info("4H --> H Matrix multiplication takes max. {max_time:.4f} ms,  min. {min_time:.4f} ms, avg. {avg_time:.4f} ms"
+    .format(max_time=np.max(T_dict_individual['T_4H_H']/1e6), 
+    min_time=np.min(T_dict_individual['T_4H_H']/1e6), avg_time=np.mean(T_dict_individual['T_4H_H']/1e6)))
+    logging.info("Second Reduce Scatter for SP takes max. {max_time:.4f} ms,  min. {min_time:.4f} ms, avg. {avg_time:.4f} ms"
+    .format(max_time=np.max(T_dict_individual['T_reduce_scatter_2']/1e6), 
+    min_time=np.min(T_dict_individual['T_reduce_scatter_2']/1e6), avg_time=np.mean(T_dict_individual['T_reduce_scatter_2']/1e6)))
+    logging.info("Second Allreduce for TP takes max. {max_time:.4f} ms,  min. {min_time:.4f} ms, avg. {avg_time:.4f} ms"
+    .format(max_time=np.max(T_dict_individual['T_allreduce_2']/1e6), 
+    min_time=np.min(T_dict_individual['T_allreduce_2']/1e6), avg_time=np.mean(T_dict_individual['T_allreduce_2']/1e6)))
+    logging.info("Grad Sync Allreduce over DP groups takes max. {max_time:.4f} ms,  min. {min_time:.4f} ms, avg. {avg_time:.4f} ms"
+    .format(max_time=np.max(T_grad_sync_individual/1e6), 
+    min_time=np.min(T_grad_sync_individual/1e6), avg_time=np.mean(T_grad_sync_individual/1e6)))
+    ###################
+    logging.info("==== Total Times for all transformer layers ====")
     logging.info("First Allgather for SP takes max. {max_time:.4f} ms,  min. {min_time:.4f} ms, avg. {avg_time:.4f} ms".format(max_time=np.max(T_dict_total['T_allgather_1']), 
     min_time=np.min(T_dict_total['T_allgather_1']), avg_time=np.mean(T_dict_total['T_allgather_1'])))
     logging.info("Column Parallel Attention Matrix W_QKV multiplication takes max. {max_time:.4f} ms,  min. {min_time:.4f} ms, avg. {avg_time:.4f} ms"
