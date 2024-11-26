@@ -510,8 +510,8 @@ if rank == 0:
     logging.info(f"Parameters (per rank) = {number_of_total_parameters / 1e9} Billions")
     logging.info(f"N_iter_grad_sync = {n_iter_grad_sync}")
     logging.info("==== Timings per transformer layer ====")
-    logging.info("First Allgather for SP takes max. {max_time:.4f} ms,  min. {min_time:.4f} ms, avg. {avg_time:.4f} ms".format(max_time=np.max(T_dict_individual['T_allgather_1']/1e6), 
-    min_time=np.min(T_dict_individual['T_allgather_1']/1e6), avg_time=np.mean(T_dict_individual['T_allgather_1']/1e6)))
+    logging.info("First Allgather for SP takes max. {max_time:.4f} ms,  min. {min_time:.4f} ms, avg. {avg_time:.4f} ms".format(max_time=np.max((T_dict_individual['T_allgather_1'].flatten())/1e6), 
+    min_time=np.min((T_dict_individual['T_allgather_1'].flatten())/1e6), avg_time=np.mean((T_dict_individual['T_allgather_1'].flatten())/1e6)))
     logging.info("Column Parallel Attention Matrix W_QKV multiplication takes max. {max_time:.4f} ms,  min. {min_time:.4f} ms, avg. {avg_time:.4f} ms"
     .format(max_time=np.max(T_dict_individual['T_QKV']/1e6), 
     min_time=np.min(T_dict_individual['T_QKV']/1e6), avg_time=np.mean(T_dict_individual['T_QKV']/1e6)))
