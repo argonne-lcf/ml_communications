@@ -1,5 +1,5 @@
 #!/bin/bash -x
-#PBS -l select=2
+#PBS -l select=1
 #PBS -l place=scatter
 #PBS -l walltime=00:10:00
 #PBS -q debug
@@ -26,7 +26,7 @@ LOG_WRAPPER=${WORK_DIR}/log_wrapper.sh
 
 TP_DEGREE=4
 TIMING_LOOPS=3
-TRIAL=1
+TRIAL=2
 
 # MPI and OpenMP settings
 NNODES=`wc -l < $PBS_NODEFILE`
@@ -48,7 +48,7 @@ echo "========= CCL VARIABLES =============="
 printenv | grep "CCL"
 echo "========= CCL VARIABLES =============="
 
-RUN_ID=polaris_tensor_parallel_TP${TP_DEGREE}_SP_TIMING_LOOPS${TIMING_LOOPS}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}
+RUN_ID=polaris_tensor_parallel_TP${TP_DEGREE}_SP_TIMING_LOOPS${TIMING_LOOPS}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H:%M:%S")
 
 echo "${RUN_ID}"
 

@@ -487,9 +487,15 @@ if rank == 0:
     logging.info("==== List of Arguments ====")
     logging.info("Input mean before operations = {input_mean:4f}".format(input_mean=input.mean()))
     logging.info("Result mean after all  operations = {output_mean:4f}".format(output_mean=interim4.mean()))
+    logging.info(f"Shape of the (Q,K,V) atten. matrix = {attn_W_QKV.shape}")
+    logging.info(f"Shape of the WO atten. matrix = {attn_WO.shape}")
+    logging.info(f"Shape of the Weight matrix (H --> 4H)= {mat_h_4h.shape}")
+    logging.info(f"Shape of the Weight matrix (4H --> H)= {mat_4h_h.shape}")
     logging.info(f"Interim 2 Size = {interim2.shape}")
     logging.info(f"Interim 4 Size = {interim4.shape}")
-    logging.info(f"Allgather buffer size = {(args.sequence_length * data_type_multiplier) / 8 / 1e6} MB")
+    logging.info(f"Parameters (per rank) = {number_of_total_parameters / 1e9} Billions")
+    logging.info(f"N_iter_grad_sync = {n_iter_grad_sync}")
+    logging.info(f"Allgather buffer size = {(args.sequence_length * args.hidden_dimension * data_type_multiplier) / 8 / 1e6} MB")
     logging.info(f"Grad Sync Allreduce bucket size = {(highest_bucket_size * data_type_multiplier) / 8 / 1e6} MB") 
     logging.info(f"DP Allreduce Throughput = {(((highest_bucket_size * data_type_multiplier) / 8) / (T_grad_sync_individual[0,0])) * 1e3} MB/s")
     if SP:
@@ -503,15 +509,9 @@ if rank == 0:
         logging.info(f"TP Allreduce 2 data volume per layer per iteration = {(tp_allreduce_2_data_volume ) / 8 / 1e6} MB")
         logging.info(f"TP Allreduce 1 Max. Throughput per layer per iteration = {((tp_allreduce_1_data_volume / 8 ) / np.min(T_dict_individual['T_allreduce_1'])) * 1e3} MB/s")
         logging.info(f"TP Allreduce 2 Max. Throughput per layer per iteration = {((tp_allreduce_2_data_volume / 8 ) / np.min(T_dict_individual['T_allreduce_2'])) * 1e3} MB/s")
-    logging.info(f"Shape of the (Q,K,V) atten. matrix = {attn_W_QKV.shape}")
-    logging.info(f"Shape of the WO atten. matrix = {attn_WO.shape}")
-    logging.info(f"Shape of the Weight matrix (H --> 4H)= {mat_h_4h.shape}")
-    logging.info(f"Shape of the Weight matrix (4H --> H)= {mat_4h_h.shape}")
-    logging.info(f"Parameters (per rank) = {number_of_total_parameters / 1e9} Billions")
-    logging.info(f"N_iter_grad_sync = {n_iter_grad_sync}")
-    logging.info("==== Timings per transformer layer ====")
-    logging.info("First Allgather for SP takes max. {max_time:.4f} ms,  min. {min_time:.4f} ms, avg. {avg_time:.4f} ms".format(max_time=np.max((T_dict_individual['T_allgather_1'].flatten())/1e6), 
-    min_time=np.min((T_dict_individual['T_allgather_1'].flatten())/1e6), avg_time=np.mean((T_dict_individual['T_allgather_1'].flatten())/1e6)))
+    logging.info("\n==== Timings per transformer layer ====")
+    logging.info("First Allgather for SP takes max. {max_time:.4f} ms,  min. {min_time:.4f} ms, avg. {avg_time:.4f} ms".format(max_time=np.max(T_dict_individual['T_allgather_1']/1e6), 
+    min_time=np.min((T_dict_individual['T_allgather_1'])/1e6), avg_time=np.mean((T_dict_individual['T_allgather_1'])/1e6)))
     logging.info("Column Parallel Attention Matrix W_QKV multiplication takes max. {max_time:.4f} ms,  min. {min_time:.4f} ms, avg. {avg_time:.4f} ms"
     .format(max_time=np.max(T_dict_individual['T_QKV']/1e6), 
     min_time=np.min(T_dict_individual['T_QKV']/1e6), avg_time=np.mean(T_dict_individual['T_QKV']/1e6)))
@@ -543,7 +543,7 @@ if rank == 0:
     .format(max_time=np.max(T_grad_sync_individual/1e6), 
     min_time=np.min(T_grad_sync_individual/1e6), avg_time=np.mean(T_grad_sync_individual/1e6)))
     ###################
-    logging.info("==== Total Times for all transformer layers ====")
+    logging.info("\n==== Total Times for all transformer layers ====")
     logging.info("First Allgather for SP takes max. {max_time:.4f} ms,  min. {min_time:.4f} ms, avg. {avg_time:.4f} ms".format(max_time=np.max(T_dict_total['T_allgather_1']), 
     min_time=np.min(T_dict_total['T_allgather_1']), avg_time=np.mean(T_dict_total['T_allgather_1'])))
     logging.info("Column Parallel Attention Matrix W_QKV multiplication takes max. {max_time:.4f} ms,  min. {min_time:.4f} ms, avg. {avg_time:.4f} ms"
