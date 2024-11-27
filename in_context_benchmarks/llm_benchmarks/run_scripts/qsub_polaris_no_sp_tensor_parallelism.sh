@@ -1,8 +1,8 @@
 #!/bin/bash -x
-#PBS -l select=4
+#PBS -l select=1
 #PBS -l place=scatter
 #PBS -l walltime=00:10:00
-#PBS -q debug-scaling
+#PBS -q debug
 #PBS -A datascience
 #PBS -l filesystems=home:eagle
 #PBS -k doe
@@ -25,8 +25,7 @@ WORK_DIR=/home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks
 LOG_WRAPPER=${WORK_DIR}/log_wrapper.sh 
 
 TP_DEGREE=4
-TIMING_LOOPS=4
-WARMUPS=4
+TIMING_LOOPS=3
 PRECISION="float32"
 TRIAL=1
 
@@ -50,7 +49,7 @@ echo "========= CCL VARIABLES =============="
 printenv | grep "CCL"
 echo "========= CCL VARIABLES =============="
 
-RUN_ID=polaris_tensor_parallel_TP${TP_DEGREE}_SP_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
+RUN_ID=polaris_tensor_parallel_TP${TP_DEGREE}_NO_SP_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H:%M:%S")
 
 echo "${RUN_ID}"
 
@@ -59,8 +58,6 @@ echo "$(timestamp): Before mpiexec."
 
 mpiexec -n ${NRANKS} -ppn ${NRANKS_PER_NODE} -l --line-buffer \
 python ${WORK_DIR}/tensor_parallel_with_gradient_synchronization.py \
--tp_degree=${TP_DEGREE} -sp_switch --warmup_iterations ${WARMUPS} --iterations ${TIMING_LOOPS} --precision ${PRECISION} \
+-tp_degree=${TP_DEGREE} --iterations=${TIMING_LOOPS} --precision ${PRECISION} \
 --logging --log_directory=${WORK_DIR}/run_scripts/outdir/logs --log_file=${RUN_ID}.log
-
-echo "$(timestamp): Finished the workload."
 
