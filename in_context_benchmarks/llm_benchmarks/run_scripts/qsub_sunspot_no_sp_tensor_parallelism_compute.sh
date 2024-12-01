@@ -56,7 +56,7 @@ echo "========= CCL VARIABLES =============="
 printenv | grep "CCL"
 echo "========= CCL VARIABLES =============="
 
-RUN_ID=sunspot_tensor_parallel_TP${TP_DEGREE}_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
+RUN_ID=sunspot_tensor_parallel_TP${TP_DEGREE}_NO_SP_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
 
 echo "${RUN_ID}"
 
@@ -65,7 +65,7 @@ echo "$(timestamp): Before mpiexec."
 
 mpiexec --pmi=pmix -n ${NRANKS} -ppn ${NRANKS_PER_NODE} -l --line-buffer --cpu-bind ${CPU_AFFINITY} --mem-bind ${MEM_BIND} \
 ${LOG_WRAPPER} python ${WORK_DIR}/tensor_parallel_with_gradient_synchronization.py -dvc "xpu" \
--tp_degree=${TP_DEGREE} -sp_switch --warmup_iterations ${WARMUPS} --iterations=${TIMING_LOOPS} --precision ${PRECISION} \
+-tp_degree=${TP_DEGREE} --warmup_iterations ${WARMUPS} --iterations=${TIMING_LOOPS} --precision ${PRECISION} \
 --logging --log_directory=${WORK_DIR}/run_scripts/outdir/logs --log_file=${RUN_ID}.log
 
 echo "$(timestamp): Finished the workload."
