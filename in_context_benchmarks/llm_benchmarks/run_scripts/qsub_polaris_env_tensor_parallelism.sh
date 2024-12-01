@@ -1,7 +1,7 @@
 #!/bin/bash -x
-#PBS -l select=8
+#PBS -l select=4
 #PBS -l place=scatter
-#PBS -l walltime=00:30:00
+#PBS -l walltime=00:20:00
 #PBS -q debug-scaling
 #PBS -A datascience
 #PBS -l filesystems=home:eagle
@@ -38,10 +38,17 @@ let NRANKS=${NNODES}*${NRANKS_PER_NODE}
 
 module use /soft/modulefiles/
 module load conda/2024-04-29
-conda activate
+conda activate 
 
-# To prevent error message related to AWS Libfabric not found
-unset NCCL_COLLNET_ENABLE NCCL_CROSS_NIC NCCL_NET NCCL_NET_GDR_LEVEL
+export NCCL_NET_GDR_LEVEL=PHB
+export NCCL_CROSS_NIC=1
+export NCCL_COLLNET_ENABLE=1
+export NCCL_NET="AWS Libfabric"
+export LD_LIBRARY_PATH=/soft/libraries/aws-ofi-nccl/v1.9.1-aws/lib:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=/soft/libraries/hwloc/lib/:$LD_LIBRARY_PATH
+export FI_CXI_DISABLE_HOST_REGISTER=1
+export FI_MR_CACHE_MONITOR=userfaultfd
+export FI_CXI_DEFAULT_CQ_SIZE=131072
 
 echo "========= ENVIRONMENT VARIABLES ======="
 env
@@ -53,7 +60,7 @@ echo "========= CCL VARIABLES =============="
 printenv | grep "CCL"
 echo "========= CCL VARIABLES =============="
 
-RUN_ID=polaris_tensor_parallel_TP${TP_DEGREE}_NO_SP_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
+RUN_ID=polaris_tensor_parallel_ENV_AWS_TP${TP_DEGREE}_SP_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
 
 echo "${RUN_ID}"
 
@@ -62,6 +69,8 @@ echo "$(timestamp): Before mpiexec."
 
 mpiexec -n ${NRANKS} -ppn ${NRANKS_PER_NODE} -l --line-buffer \
 python ${WORK_DIR}/tensor_parallel_with_gradient_synchronization.py \
--tp_degree=${TP_DEGREE} --warmup_iterations ${WARMUPS} --iterations=${TIMING_LOOPS} --precision ${PRECISION} \
+-tp_degree=${TP_DEGREE} -sp_switch --warmup_iterations ${WARMUPS} --iterations ${TIMING_LOOPS} --precision ${PRECISION} \
 --logging --log_directory=${WORK_DIR}/run_scripts/outdir/logs --log_file=${RUN_ID}.log
+
+echo "$(timestamp): Finished the workload."
 

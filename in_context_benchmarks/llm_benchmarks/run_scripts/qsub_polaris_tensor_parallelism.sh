@@ -1,7 +1,7 @@
 #!/bin/bash -x
-#PBS -l select=4
+#PBS -l select=8
 #PBS -l place=scatter
-#PBS -l walltime=00:10:00
+#PBS -l walltime=00:20:00
 #PBS -q debug-scaling
 #PBS -A datascience
 #PBS -l filesystems=home:eagle
