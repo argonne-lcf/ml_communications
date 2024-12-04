@@ -20,12 +20,10 @@ def set_sequence_shard_list(shard_list: list):
     global SEQUENCE_SHARD_LIST
     SEQUENCE_SHARD_LIST = shard_list
 
-## TODO:
-# Fix backward
-# reduce permute & transpose ?
+## TODO: reduce the number of permute & transpose?
 
 def even_all2all(input, group):
-    out = torch.empty_like(input)
+    out = torch.empty_like(input, device=RANK) ## Q. How come during backgward(), the default device is not used? 
     dist.all_to_all_single(out, input, group=group)
     return out
 
@@ -34,14 +32,14 @@ def uneven_all2all(is_first_all2all, input, group):
         _SP, local_seq, B, local_hc, hs = input.shape ## _SP avoids SP variable collision.
         input_splits = [1]*SP
         output_splits = get_sequence_shard_list()
-        seq = sum(output_splits)
-        out = torch.empty(seq, B, local_hc, hs)
+        s = sum(output_splits)
+        out = torch.empty(s, B, local_hc, hs, device=RANK)
     else:
         s, B, local_hc, hs = input.shape
         input_splits = get_sequence_shard_list()
         output_splits = [1]*SP
         local_seq = get_sequence_shard_list()[RANK]
-        out = torch.empty(SP, local_seq, B, local_hc, hs) ## TODO: Do we need this SP dimension?
+        out = torch.empty(SP, local_seq, B, local_hc, hs, device=RANK) ## TODO: Do we need this SP dimension?
     dist.all_to_all_single(out, input, group=group, input_split_sizes=input_splits, output_split_sizes=output_splits)
     return out
 
@@ -59,7 +57,8 @@ class All2All(torch.autograd.Function):
         if is_first_all2all:
             local_s, B, hc, hs = input.shape
             local_hc = hc//SP
-            input = (input
+            input = (
+                input
                 .view(local_s, B, SP, local_hc, hs) ## split head by SP degree
                 .permute(2, 0, 1, 3, 4) ## [sp, local_s, B, hc/sp, 3*hs]
                 .contiguous()
@@ -71,6 +70,7 @@ class All2All(torch.autograd.Function):
         else:
             s, B, local_hc, hs = input.shape
             hc = local_hc * SP
+            input = input.contiguous()
             if is_uneven_sequence:
                 local_s = get_sequence_shard_list()[RANK]
                 out = uneven_all2all(is_first_all2all, input, group)
@@ -84,6 +84,7 @@ class All2All(torch.autograd.Function):
             )
         return out
     
+    @staticmethod
     def backward(ctx, *grad_output):
         return All2All.apply(*grad_output, ctx.scatter_idx, ctx.gather_idx, ctx.group), None, None, None ## trigger the conjugate collective communication
 
@@ -123,11 +124,11 @@ if __name__ == "__main__":
     B = 1
     s = 4099
     hid_dim = 4096
-    hc = 16
+    hc = 32
     hs = hid_dim // hc
     num_layers = 24
     unit_test = True
-    dtype = torch.float32 ## {torch.bfloat16, torch.float16, etc}
+    dtype = torch.float16 ## {torch.bfloat16, torch.float16, etc}
 
     ## Global setting:
     # torch.backends.cuda.enable_flash_sdp(enabled) ## globally enable FA2. By default, let pytorch choose the most optimal one
@@ -163,16 +164,15 @@ if __name__ == "__main__":
     x_sequence_parallel = x[strt_idx:end_idx, :, :, :].clone() ## prevent memory sharing/aliasing.
     label_sequence_parallel = x[strt_idx:end_idx, :, :, :]
 
-    ## TODO: Add thorough timers
+    ## TODO: Add timers (using decorators + labmda?)
     ## Q. Why doesn't time increase as we increase torch.dtype?
     strt = time.time()
     ulysses = DistributedTransformer(embedding_dim, num_layers)
     ulysses_out = ulysses(x_sequence_parallel, sp_group) ## (s/sp, B, hc, hs)
-    torch.cuda.synchronize() ## Q. can't we just use barrier?
+    torch.cuda.synchronize()
     if RANK == 0:
         print(f"total time taken: {time.time() - strt}")
 
-    ## Q. Make the unit_test separate?
     if unit_test:
         def empty_grad(model):
             for param in model.parameters():
@@ -182,7 +182,6 @@ if __name__ == "__main__":
 
         no_ulysses_out = no_ulysses(x) ## (s, B, hc, hs)
 
-        ## TODO: Implement custom ccl with backpropagation
         with torch.no_grad():
             gathered_ulysses_out = torch.empty_like(no_ulysses_out)
             # dist.all_gather_into_tensor(gathered_ulysses_out, ulysses_out, group=sp_group)
@@ -197,31 +196,36 @@ if __name__ == "__main__":
 
         ## TODO: log max memory.
         # max_mem =
-        mean_out_diff = torch.norm(no_ulysses_out - gathered_ulysses_out, p=1) / gathered_ulysses_out.numel()
+        out_diff = no_ulysses_out - gathered_ulysses_out
+        mean_out_diff = torch.norm(out_diff, p=1) / gathered_ulysses_out.numel()
+        max_out_diff = out_diff.max()
         # assert mean_out_diff < eps, f"outputs are not close enough. Diff: {mean_out_diff}"
         ## Q. Does the small difference come from ccl or nn layers? 
 
-        ## TODO: uncomment below after implementing backward
-        # no_ulysses_loss = F.mse_loss(no_ulysses_out, label)
-        # no_ulysses_loss.backward()
-        # ## TODO: only gather and do compute loss and gradient on rank==0? 
-        # ulysses_loss = F.mse_loss(ulysses_out, label_sequence_parallel)
-        # ulysses_loss.backward()
+        no_ulysses_loss = F.mse_loss(no_ulysses_out, label)
+        no_ulysses_loss.backward()
+        ulysses_loss = F.mse_loss(ulysses_out, label_sequence_parallel)
+        ulysses_loss.backward()
 
-        # out_diff = torch.norm(no_ulysses_out - ulysses_out, p=1) ## l1 norm
-        # total_grad_diff = 0
-        # for grad1, grad2 in zip(no_ulysses.parameters(), ulysses.parameters()):
-        #     total_grad_diff += torch.norm(grad1 - grad2, p=1)
-        # num_parameters = sum([param.numel() for param in ulysses.parameters()])
-        # mean_grad_diff_per_param = total_grad_diff / num_parameters
+        total_grad_diff = 0
+        grad_max_diff = 0
+        for param1, param2 in zip(no_ulysses.parameters(), ulysses.parameters()):
+            diff = param1.grad - param2.grad
+            total_grad_diff += torch.norm(diff, p=1)
+            grad_max_diff = max(grad_max_diff, diff.max())
+        num_parameters = sum([param.numel() for param in ulysses.parameters()])
+        mean_grad_diff_per_param = total_grad_diff / num_parameters
 
         if RANK == 0:
-            print(f"mean_out_diff: {mean_out_diff}")
-            # print(f"total_grad_diff: {total_grad_diff}")
-            # print(f"mean_grad_diff_per_param: {mean_grad_diff_per_param}")
+            print(f"Unit Test Results:\n",
+                f"out_mean_diff: {mean_out_diff}\n",
+                f"out_max_diff: {max_out_diff}", flush=True)
 
-        # assert out_diff < eps
-        # assert mean_grad_diff_per_param < eps
+        for i in range(WORLD_SIZE):
+            if i == RANK:
+                print(f"Rank {RANK}, grad_mean_diff: {mean_grad_diff_per_param}", flush=True)
+                print(f"Rank {RANK}, grad_max_diff: {grad_max_diff}", flush=True)
+            dist.barrier()
 
 ## Learning notes:
 ## all_to_all: input partitioned list and output gathered list unconcatenated.
