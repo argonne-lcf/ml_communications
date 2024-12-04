@@ -11,16 +11,83 @@ import torch.nn.functional as F
 import torch.distributed as dist
 import time
 
-## TBD
-# class All2All(torch.autograd.Function):
-#     def forward(ctx, gather, scatter):
+SEQUENCE_SHARD_LIST = None
 
+def get_sequence_shard_list():
+    return SEQUENCE_SHARD_LIST
 
-#     def backward():
+def set_sequence_shard_list(shard_list: list):
+    global SEQUENCE_SHARD_LIST
+    SEQUENCE_SHARD_LIST = shard_list
 
-# def all2all_single():
+## TODO:
+# Fix backward
+# reduce permute & transpose ?
 
-class DistributedMLP(nn.Module):
+def even_all2all(input, group):
+    out = torch.empty_like(input)
+    dist.all_to_all_single(out, input, group=group)
+    return out
+
+def uneven_all2all(is_first_all2all, input, group):
+    if is_first_all2all:
+        _SP, local_seq, B, local_hc, hs = input.shape ## _SP avoids SP variable collision.
+        input_splits = [1]*SP
+        output_splits = get_sequence_shard_list()
+        seq = sum(output_splits)
+        out = torch.empty(seq, B, local_hc, hs)
+    else:
+        s, B, local_hc, hs = input.shape
+        input_splits = get_sequence_shard_list()
+        output_splits = [1]*SP
+        local_seq = get_sequence_shard_list()[RANK]
+        out = torch.empty(SP, local_seq, B, local_hc, hs) ## TODO: Do we need this SP dimension?
+    dist.all_to_all_single(out, input, group=group, input_split_sizes=input_splits, output_split_sizes=output_splits)
+    return out
+
+class All2All(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input, gather_idx, scatter_idx, group):
+        '''
+            input: []
+        '''
+        ctx.group = group
+        ctx.gather_idx = gather_idx
+        ctx.scatter_idx = scatter_idx
+        is_first_all2all = gather_idx < 2
+        is_uneven_sequence = (get_sequence_shard_list() is not None)
+        if is_first_all2all:
+            local_s, B, hc, hs = input.shape
+            local_hc = hc//SP
+            input = (input
+                .view(local_s, B, SP, local_hc, hs) ## split head by SP degree
+                .permute(2, 0, 1, 3, 4) ## [sp, local_s, B, hc/sp, 3*hs]
+                .contiguous()
+            )
+            if is_uneven_sequence:
+                out = uneven_all2all(is_first_all2all, input, group)
+            else:
+                out = even_all2all(input, group)
+        else:
+            s, B, local_hc, hs = input.shape
+            hc = local_hc * SP
+            if is_uneven_sequence:
+                local_s = get_sequence_shard_list()[RANK]
+                out = uneven_all2all(is_first_all2all, input, group)
+            else:
+                local_s = s // SP
+                out = even_all2all(input, group)
+            out = (out
+                .permute(1, 2, 0, 3, 4) ## [local_s, B, sp, hc/sp, hs]
+                .contiguous() 
+                .flatten(2, 3) ## [local_s, B, hc, hs]
+            )
+        return out
+    
+    def backward(ctx, *grad_output):
+        return All2All.apply(*grad_output, ctx.scatter_idx, ctx.gather_idx, ctx.group), None, None, None ## trigger the conjugate collective communication
+
+class DistributedTransformer(nn.Module):
     def __init__(self, emb_dim, num_layers):
         super().__init__()
         self.num_layers = num_layers
@@ -28,53 +95,33 @@ class DistributedMLP(nn.Module):
         self.dense_outs = nn.ModuleList(nn.Linear(emb_dim, emb_dim) for _ in range(num_layers)) ## dense layer on att_out
         
     def forward(self, x:torch.tensor, sp_group=None, comm_only:bool=False) -> torch.tensor:
-        loc_s, B, hc, hs = x.size()
+        s, B, hc, hs = x.size()
         for get_qkv, dense_out in zip(self.get_qkvs, self.dense_outs):
-            x = x.view(loc_s, B, hc*hs) ## [loc_s, B, hc*hs]: flatten to perform full GEMM
-            qkv = get_qkv(x) ## [loc_s, B, 3*hc*hs] - project to 3xdim for qkv
+            x = x.view(s, B, hc*hs) ## [local_s, B, hc*hs] flatten to perform full GEMM
+            qkv = get_qkv(x).view(s, B, hc, 3*hs) ## [local_s, B, 3*hc*hs] project to 3xdim for qkv
             
-            ## First all2all: 
             if sp_group is not None:
-                qkv = (
-                    qkv
-                    ## Q. How .view works: would it matter if SP was on the right of hc//sp?
-                    .view(loc_s, B, SP, hc//SP, 3*hs) ## split head by SP degree
-                    .permute(2, 0, 1, 3, 4) ## [sp, loc_s, B, hc/sp, 3*hs]
-                    .contiguous()
-                )
-                ## Q. First dim have to be WORLD_SIZE? Why? dist all2all is VERY mysterious.
-                first_all2lall = torch.empty_like(qkv)
-                dist.all_to_all_single(first_all2lall, qkv, group=sp_group)
-                qkv = first_all2lall.reshape(loc_s*SP, B, hc//SP, 3*hs) ## [s, B, hc/sp, 3*hs]
-            else:
-                qkv = qkv.view(loc_s, B, hc, 3*hs)
+                qkv = All2All.apply(qkv, 0, 2, sp_group) ## First all2all
 
             ## ATTENTION MECHANISM
-            qkv = qkv.permute(1, 2, 0, 3) ## [B, hc/sp, loc_s, 3*hs] Follow torch attention's syntax
-            q, k, v = qkv.tensor_split(3, dim=-1) ## [B, hc/sp, loc_s, hs] x3
-            att_out = F.scaled_dot_product_attention(q, k, v) ## [B, hc/sp, loc_s, hs] x3 -> [B, hc/sp, s, hs]
-            x = att_out.permute(2, 0, 1, 3) ## [s, B, hc/sp, hs] - Follow all2all syntax
+            qkv = qkv.permute(1, 2, 0, 3) ## [B, hc/sp, local_s, 3*hs] Follow torch attention's dimension syntax
+            q, k, v = qkv.tensor_split(3, dim=-1) ## [B, hc/sp, local_s, hs] x3 Extract qkv
+            att_out = F.scaled_dot_product_attention(q, k, v) ## [B, hc/sp, s, hs]
+            x = att_out.permute(2, 0, 1, 3) ## [s, B, hc/sp, hs] Follow all2all syntax
 
-            ## Second all2all: 
             if sp_group is not None:
-                x = x.reshape(SP, loc_s, B, hc//SP, hs) ## extract SP
-                second_all2all = torch.empty_like(x)
-                dist.all_to_all_single(second_all2all, x, group=sp_group)
-                x = (
-                    second_all2all
-                    .permute(1, 2, 0, 3, 4) ## [loc_s, B, sp, hc/sp, hs]
-                    .reshape(loc_s, B, hc, hs) ## [loc_s, B, hc, hs]
-                )
-            x = x.view(loc_s, B, hc*hs)
-            x = dense_out(x)
-            x = x.view(loc_s, B, hc, hs)
+                x = All2All.apply(x, 2, 0, sp_group) ## Second all2all: 
+
+            ## final linear projection
+            x = x.view(s, B, hc*hs)
+            x = dense_out(x).view(s, B, hc, hs)
         return x
 
 if __name__ == "__main__":
     ## TODO: add argparse
     # import argparse
     B = 1
-    s = 4096
+    s = 4099
     hid_dim = 4096
     hc = 16
     hs = hid_dim // hc
@@ -87,41 +134,50 @@ if __name__ == "__main__":
     torch.set_default_device(RANK)
     torch.set_default_dtype(dtype)
 
+    torch.manual_seed(42) ## seed for both CPU and CUDA
+    x = torch.randn(s, B, hc, hs)
+    label = torch.randn(s, B, hc, hs)
+    embedding_dim = hc * hs
+
+    # def setup_sequence_parallel    
     dist.init_process_group(backend="nccl", rank=RANK, world_size=WORLD_SIZE)
-    ## TODO: make SP-group agnostic to DP
     sp_group = dist.new_group(ranks=range(WORLD_SIZE)) ## Set up Ulysses group
-    
+
     assert WORLD_SIZE % DP == 0, "world size {WORLD_SIZE} not divisible by DP degree {DP}"
     assert WORLD_SIZE % SP == 0, "world size {WORLD_SIZE} not divisible by Ulysses degree {SP}"
     assert hid_dim % hc == 0, "hidden_dim not divisible by hc"
     assert hc % SP == 0, "head count should be divisible by ulysses-degree"
-    assert s % SP == 0, "sequence is not divisible by ulysses-degree"
 
-    torch.manual_seed(42) ## seed for both CPU and CUDA
-    x = torch.randn(s, B, hc, hs)
-    label = torch.randn(s, B, hc, hs)
-    emb_dim = hc * hs
-
-    ## scatter data across sequence dimension
     sub_seq = s // SP
-    strt_idx = sub_seq * RANK
-    end_idx = strt_idx + sub_seq
-    x_SP = x[strt_idx:end_idx, :, :, :].clone() ## prevent memory sharing/aliasing.
+    remainder_sequence = s % SP
+    if remainder_sequence != 0: ## if uneven sequence length
+        shard_list = [sub_seq + remainder_sequence] + [sub_seq]*(SP-1)
+        set_sequence_shard_list(shard_list)
+
+    if RANK == 0: ## first RANK gets extra sequence
+        strt_idx = sub_seq * RANK
+        end_idx = strt_idx + sub_seq + remainder_sequence 
+    else:
+        strt_idx = sub_seq * RANK + remainder_sequence
+        end_idx = strt_idx + sub_seq
+    x_sequence_parallel = x[strt_idx:end_idx, :, :, :].clone() ## prevent memory sharing/aliasing.
+    label_sequence_parallel = x[strt_idx:end_idx, :, :, :]
 
     ## TODO: Add thorough timers
-    ## Q. why doesn't this increase as we increase torch.dtype?
+    ## Q. Why doesn't time increase as we increase torch.dtype?
     strt = time.time()
-    ulysses = DistributedMLP(emb_dim, num_layers)
-    ulysses_out = ulysses(x_SP, sp_group) ## (s/sp, B, hc, hs)
+    ulysses = DistributedTransformer(embedding_dim, num_layers)
+    ulysses_out = ulysses(x_sequence_parallel, sp_group) ## (s/sp, B, hc, hs)
     torch.cuda.synchronize() ## Q. can't we just use barrier?
-    print(time.time() - strt)
+    if RANK == 0:
+        print(f"total time taken: {time.time() - strt}")
 
-    ## TODO: Make the unit_test separate?
+    ## Q. Make the unit_test separate?
     if unit_test:
         def empty_grad(model):
             for param in model.parameters():
                 param.grad = None
-        no_ulysses = DistributedMLP(emb_dim, num_layers)
+        no_ulysses = DistributedTransformer(embedding_dim, num_layers)
         no_ulysses.load_state_dict(ulysses.state_dict()) ## keep the init weights the same
 
         no_ulysses_out = no_ulysses(x) ## (s, B, hc, hs)
@@ -129,8 +185,15 @@ if __name__ == "__main__":
         ## TODO: Implement custom ccl with backpropagation
         with torch.no_grad():
             gathered_ulysses_out = torch.empty_like(no_ulysses_out)
-            ## Q. Does regular all-gather also have gather along only 1st dimension constarint?
-            dist.all_gather_into_tensor(gathered_ulysses_out, ulysses_out, group=sp_group)
+            # dist.all_gather_into_tensor(gathered_ulysses_out, ulysses_out, group=sp_group)
+            
+            out_lst = [torch.empty(local_seq, B, hc, hs) for local_seq in get_sequence_shard_list()]
+
+            # print(f"ulysses_out.shape: {ulysses_out.shape}")
+            dist.all_gather(out_lst, ulysses_out, group=sp_group)
+
+            gathered_ulysses_out = torch.cat(out_lst, dim=0) ## TODO: Change dim later? 
+            # raise KeyboardInterrupt()
 
         ## TODO: log max memory.
         # max_mem =
@@ -142,7 +205,7 @@ if __name__ == "__main__":
         # no_ulysses_loss = F.mse_loss(no_ulysses_out, label)
         # no_ulysses_loss.backward()
         # ## TODO: only gather and do compute loss and gradient on rank==0? 
-        # ulysses_loss = F.mse_loss(ulysses_out, label)
+        # ulysses_loss = F.mse_loss(ulysses_out, label_sequence_parallel)
         # ulysses_loss.backward()
 
         # out_diff = torch.norm(no_ulysses_out - ulysses_out, p=1) ## l1 norm

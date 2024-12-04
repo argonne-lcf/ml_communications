@@ -3,12 +3,13 @@ import argparse
 
 ## TODO: Implement combination of different parallelisms
 ## TODO: Implement head count asserts for ulysses, TP, etc. 
-## TODO: We get 59B not 80B. How to reconcile this(Layernorm, swiglu, etc.)? Does this also suggest that our TFlop formula is also underestimated?
+## TODO: We get 59B not 70B. Missing 11B? Vocab and final linear head (2 * h * V => 2 * 8192 * 128_000 = 2B?)
 ## TODO: Implement peak memory size. Also memory saving compared to DP?
+## TODO: GQA
 
 ## Lamma 70B
 parser = argparse.ArgumentParser()
-parser.add_argument("--batch_size", "-B", type=int, default=1, help="") ## Q. What was the global batch size in Llama-3 80B?
+parser.add_argument("--batch_size", "-B", type=int, default=1, help="") ## Q. What was the global batch size in Llama-3 70B
 parser.add_argument("--seq_length", "-s", type=int, default=128_000, help="") ## Q. 128K for llamma3 pretraining? https://arxiv.org/pdf/2407.21783 
                                                                               ## "In the final stages of pre-training, we train on long sequences to support context windows of up to 128K tokens"
 parser.add_argument("--hidden_size", "-hid", type=int, default=8192, help="")
@@ -50,17 +51,22 @@ def get_num_param_per_layer(h, h_):
 # def get_total_num_param(h, h_):
 #     return l * get_num_param_per_layer(h, h_)
 
-# def peak_memory_footprint():
-#     '''
-#         TODO: Difficult than I thought due to memory from Activations
-#     '''
-#     total_num_param = get_total_num_param(h, h_)
-#     memory_from_param = 16 * total_num_param ## 2 (Gradient) 2 (Fwd Weight) 4 (Momentum1) 4 (Momentum2) 4 (Master Weight)
-#     memory_from_data = B * s * h_ ## Highest activation size? 
-#     # activation_from_norm
-#     # activation_from_att
-#     # activation_from_att_
-#     # memory_from_activation = (B * s * h + B * s * h_ + B * s * h_) * l ## 
+def peak_memory_footprint():
+    '''
+        TODO: Difficult than I thought due to memory from Activations
+    '''
+    # total_num_param = get_total_num_param(h, h_)
+    # memory_from_param = 16 * total_num_param ## 2 (Gradient) 2 (Fwd Weight) 4 (Momentum1) 4 (Momentum2) 4 (Master Weight)
+    # memory_from_data = B * s * h_ ## Highest activation size? 
+    # # activation_from_norm
+    # # activation_from_att
+    # # activation_from_att_
+    # # memory_from_activation = (B * s * h + B * s * h_ + B * s * h_) * l ## 
+
+    ## Borrowing from: https://arxiv.org/html/2411.06465v1
+
+    # D = P ## DP degree
+    # DP_memory_fpt = (6 + 12/D)(2*h*)
 
 def get_comm_size_per_layer(B, s, h, P):
     '''

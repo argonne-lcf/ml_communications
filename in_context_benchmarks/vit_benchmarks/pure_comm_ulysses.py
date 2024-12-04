@@ -166,7 +166,10 @@ if __name__ == "__main__":
         # Otherwise, it can happen asyncrhnously during backpropagation. One can check the implementation of 
         # deepspeed or FSDP's zero to confirm.
         if zero == 0:
+            # strt = time.time()
             dist.all_reduce(model_grad, op=dist.ReduceOp.AVG, group=dp_group, async_op=True)
+            # print_rank0(time.time() - strt)
+            # raise KeyboardInterrupt()
         elif zero == 1:
             dist.reduce_scatter_tensor(sharded_model_grad, model_grad, op=dist.ReduceOp.AVG, async_op=True) ## flexible buffer size & async
             ## Hidden: update master weight with sharded_model_grad
@@ -183,7 +186,9 @@ if __name__ == "__main__":
 ## TODO:
 ## timers (concisely). Q. How to elegantly time async operations? 
 ## Check multi-node func
+## Fix edge case DP=1 (TBD)
 ## Q. Why is Zero123 faster than zero0? Is there something wrong with all-reduce? Try to minimally reproduce the problem. 
+## Sanity-test (profile?)
 
 # timers (get-max)?
-# sanity check by profiling? 
+# Check implementation details of zero, ulysses, etc?
