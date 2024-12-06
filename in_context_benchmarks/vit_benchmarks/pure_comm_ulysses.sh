@@ -15,8 +15,8 @@ ngpus=$((ngpus_per_node * num_nodes))
 export MASTER_ADDR="localhost"
 # export MASTER_ADDR=$(host $master_node | awk '{print $4}') ## Q. Only works on aurora for some reason? 
 export MASTER_PORT="12345"
-export SP=2 ## Ulysses World Size
-export ZERO=3 ## DP: ZERo=0
+export SP=4 ## Ulysses World Size
+export ZERO=3 ## DP: ZERO=0
 
 echo MASTER_ADDR: $MASTER_ADDR
 echo MASTER_PORT: $MASTER_PORT

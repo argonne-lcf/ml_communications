@@ -3,7 +3,8 @@
 SCRIPT_PTH=/eagle/datascience/eku/ml_communications/in_context_benchmarks/vit_benchmarks/qsub_ulysses.sh ## use abs_path
 SCRIPT_DIR=$(dirname $SCRIPT_PTH)
 
-echo "how to activate base env in a script?"
+module load conda
+conda activate base
 
 master_node=$(head -1 $PBS_NODEFILE)
 ## TODO: make below agnostic to aurora, sunspot, polaris
@@ -26,10 +27,41 @@ echo num_nodes: $num_nodes
 echo ngpus: $ngpus
 echo SP: $SP
 
-## TODO: separate out scripts for each of the below? 
-
-# 1. Holistic Ulysses
 mpiexec -ppn $ngpus_per_node -n $ngpus python $SCRIPT_DIR/holistic_ulysses.py |& tee $SCRIPT_DIR/test.log
 
 ## alternatively (torchrun automatically sets up of MASTER_ADDR and MASTER_PORT): 
 ## torchrun --nproc-per-node 12 /lus/flare/projects/Aurora_deployment/eugene/Microbenchmark/ml_communications/in_context_benchmarks/ulysses_benchmark.py
+
+
+    # try:
+    #     dist.all_to_all_single(out, input, group=group, input_split_sizes=input_splits, output_split_sizes=output_splits)
+    #     print(f"good input.shape: {input.shape}\n"
+    #             f"out.shape: {out.shape}\n"
+    #             f"good is_first_all2all: {is_first_all2all}\n"
+    #             f"good input.device: {input.device}\n"
+    #             f"good RANK: {RANK}\n",
+    #             f"good input.is_contiguous: {input.is_contiguous()}",
+    #             f"good group: {group}",
+    #             f"good input_splits: {input_splits}",
+    #             f"good output_splits: {output_splits}",
+    #             flush=True)
+    # except:
+    #     # zeros = torch.zeros_like(input)
+    #     # zeros_out = torch.zeros_like(out)
+    #     # dist.all_to_all_single(zeros_out, zeros, group=group, input_split_sizes=input_splits, output_split_sizes=output_splits)
+
+    #     # assert input.is_cuda, "input.is_cuda"
+    #     # assert not input.is_sparse, "input.is_sparse"
+
+    #     print(f"input.shape: {input.shape}\n"
+    #             f"out.shape: {out.shape}\n"
+    #             f"is_first_all2all: {is_first_all2all}\n"
+    #             f"input.device: {input.device}\n"
+    #             f"RANK: {RANK}\n",
+    #             f"input.is_contiguous: {input.is_contiguous()}",
+    #             f"group: {group}",
+    #             f"input_splits: {input_splits}",
+    #             f"output_splits: {output_splits}",
+    #             flush=True)
+    #     # raise e
+    #     raise KeyboardInterrupt()
