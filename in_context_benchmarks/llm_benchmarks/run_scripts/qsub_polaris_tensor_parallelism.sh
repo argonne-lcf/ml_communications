@@ -27,7 +27,7 @@ LOG_WRAPPER=${WORK_DIR}/log_wrapper.sh
 TP_DEGREE=4
 TIMING_LOOPS=4
 WARMUPS=4
-PRECISION="float32"
+PRECISION="bfloat16"
 TRIAL=1
 
 # MPI and OpenMP settings
@@ -39,6 +39,9 @@ let NRANKS=${NNODES}*${NRANKS_PER_NODE}
 module use /soft/modulefiles/
 module load conda/2024-04-29
 conda activate 
+
+# To prevent error message related to AWS Libfabric not found
+unset NCCL_COLLNET_ENABLE NCCL_CROSS_NIC NCCL_NET NCCL_NET_GDR_LEVEL
 
 echo "========= ENVIRONMENT VARIABLES ======="
 env

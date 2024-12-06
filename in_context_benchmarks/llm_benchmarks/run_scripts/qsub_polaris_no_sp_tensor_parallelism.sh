@@ -1,5 +1,5 @@
 #!/bin/bash -x
-#PBS -l select=8
+#PBS -l select=2
 #PBS -l place=scatter
 #PBS -l walltime=00:30:00
 #PBS -q debug-scaling
@@ -9,7 +9,7 @@
 #PBS -e /home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks/run_scripts/errordir
 #PBS -o /home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks/run_scripts/outdir
 #PBS -j oe
-#PBS -N LLM_test_8x12 
+#PBS -N FP32_NOSP 
 
 ## Timezone US/Central
 export TZ='/usr/share/zoneinfo/US/Central'
