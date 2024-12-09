@@ -272,7 +272,7 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync, warmup=False):
         timing_loop_time += (timing_loop_end_time - timing_loop_start_time)
         timing_loop_start_time = timing_loop_end_time
     #return T_dict_individual, T_dict_total, T_grad_sync_individual
-    return TensorParallelResults(T_dict_individual, T_dict_total, T_grad_sync_individual, interim2.cpu(), interim4.cpu(), allreduce_grad)
+    return TensorParallelResults(T_dict_individual, T_dict_total, T_grad_sync_individual, interim2, interim4, allreduce_grad)
 
 rank = int(MPI.COMM_WORLD.Get_rank())
 world_size = int(MPI.COMM_WORLD.Get_size())
@@ -624,9 +624,16 @@ if rank == 0:
     logging.info(f"Timing loop times = {T_dict_total['T_timing_loop']}")
     logging.info(f"==== Finished Running ====")
     if args.save:
+        result_dict = {"T_dict_individual" : result.T_dict_individual,
+                       "T_dict_total": result.T_dict_total,
+                       "T_grad_sync_individual" : result.T_grad_sync_individual,
+                       "interim2" : result.interim2.cpu(),
+                       "interim4" : result.interim4.cpu(),
+                       "allreduce_grad" : result.allreduce_grad.cpu()}
         result_dir = os.path.join(args.log_directory, "results") 
         print(result_dir)
         if not os.path.exists(result_dir):
             os.makedirs(result_dir)
-        np.save(os.path.join(result_dir, args.log_file), dict(result._asdict()))
+        #np.save(os.path.join(result_dir, args.log_file), dict(result._asdict())) ## directly converts a namedtuple to a dictionary, doesn't play well with GPU tensors.
+        np.save(os.path.join(result_dir, args.log_file), result_dict)
     

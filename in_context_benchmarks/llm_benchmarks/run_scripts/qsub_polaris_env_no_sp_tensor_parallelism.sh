@@ -1,5 +1,5 @@
 #!/bin/bash -x
-#PBS -l select=4
+#PBS -l select=1
 #PBS -l place=scatter
 #PBS -l walltime=00:20:00
 #PBS -q debug-scaling
@@ -29,7 +29,7 @@ TIMING_LOOPS=4
 WARMUPS=4
 PRECISION="float32"
 N_LAYERS=80
-TRIAL=5
+TRIAL=7
 
 # MPI and OpenMP settings
 NNODES=`wc -l < $PBS_NODEFILE`
@@ -74,7 +74,7 @@ echo "$(timestamp): Before mpiexec."
 mpiexec -n ${NRANKS} -ppn ${NRANKS_PER_NODE} -l --line-buffer \
 python ${WORK_DIR}/tensor_parallel_with_gradient_synchronization.py -n_layers ${N_LAYERS} \
 -tp_degree=${TP_DEGREE} --warmup_iterations ${WARMUPS} --iterations=${TIMING_LOOPS} --precision ${PRECISION} \
---logging --log_directory=${LOG_DIR} --log_file=${RUN_ID}.log 
+--logging --log_directory=${LOG_DIR} --log_file=${RUN_ID}.log --save
 
 echo "$(timestamp): Finished the workload."
 

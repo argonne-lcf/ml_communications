@@ -1,8 +1,10 @@
 # Python
 __pycache__/
 *.pyc
+*.npy
 
 #logs
 in_context_benchmarks/llm_benchmarks/logs/
 in_context_benchmarks/llm_benchmarks/run_scripts/outdir/
 in_context_benchmarks/llm_benchmarks/run_scripts/outdir/logs/
+in_context_benchmarks/llm_benchmarks/run_scripts/outdir/logs/results
