@@ -9,6 +9,7 @@ from collections import namedtuple
 
 import torch
 import numpy as np
+from torch.profiler import profile, record_function, ProfilerActivity
 
 #import intel_extension_for_pytorch as ipex  # noqa: F401 # type: ignore
 #import oneccl_bindings_for_pytorch  # noqa: F401 # type: ignore
@@ -54,10 +55,21 @@ parser.add_argument("-dir", "--log_directory", help="Output file path",
 
 parser.add_argument("--logging", help="Switch logging on", action='store_true')
 parser.add_argument("--save", help="Save detail results in npy format", action='store_true') ## Generates huge files, use with caution
+parser.add_argument("--trace", default=None, type=str)
 
 args = parser.parse_args()
-warmup=args.warmup_iterations
 
+def trace_func(func):
+   def wrapper(*args, **kwargs):
+      try:
+         function_name = func.__func__.__qualname__
+      except:
+         function_name = func.__qualname__
+      with record_function(function_name):
+         return func(*args, **kwargs)
+   return wrapper
+
+warmup=args.warmup_iterations
 log_directory = args.log_directory  # Directory for logs
 log_filename = args.log_file  # Log file name
 log_filepath = os.path.join(log_directory, log_filename)
@@ -73,6 +85,7 @@ elif args.precision == "bfloat16":
     data_type = torch.bfloat16
     data_type_multiplier = 16 ## 16 Bits
 
+@trace_func
 def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync, warmup=False):
     # Define how many variables you want
     operations = ["allgather_1", "QKV", "WO", "reduce_scatter_1",
@@ -264,6 +277,7 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync, warmup=False):
 rank = int(MPI.COMM_WORLD.Get_rank())
 world_size = int(MPI.COMM_WORLD.Get_size())
 
+@trace_func
 def synchronize(device):
     if device == "cuda":
         return torch.cuda.synchronize()
@@ -273,6 +287,7 @@ def synchronize(device):
         raise NotImplementedError("This method is not implemented yet.")
         return None
 
+@trace_func
 def get_device_string(device):
     if device == "cuda": 
         return f"cuda:{torch.cuda.current_device()}" 
@@ -283,6 +298,7 @@ def get_device_string(device):
         raise NotImplementedError("This method is not implemented yet.")
         return None
 
+@trace_func
 def get_device_count(device):
     if device == "cuda":
         return torch.cuda.device_count() 
@@ -292,6 +308,7 @@ def get_device_count(device):
         raise NotImplementedError("This method is not implemented yet.")
         return None
 
+@trace_func
 def set_device(visible_device):
     if args.device == "cuda":
         return torch.cuda.set_device(visible_device)
@@ -301,6 +318,7 @@ def set_device(visible_device):
         raise NotImplementedError("This method is not implemented yet.")
         return None
 
+@trace_func
 def get_backend(device):
     if device =="cuda":
         return "nccl"
@@ -458,8 +476,19 @@ allreduce_grad = torch.ones([highest_bucket_size], dtype=data_type, device=get_d
 if rank==0:
     logging.info("start loop")
 
-tensor_parallel(args.warmup_iterations, args.number_of_transformer_layers, n_iter_grad_sync, warmup=True)
-result = tensor_parallel(args.iterations, args.number_of_transformer_layers, n_iter_grad_sync, warmup=False)
+#tensor_parallel(args.warmup_iterations, args.number_of_transformer_layers, n_iter_grad_sync, warmup=True)
+
+if args.trace is not None:
+    activities=[ProfilerActivity.CPU]
+    if args.device == "xpu":
+        activities.append(ProfilerActivity.XPU)
+    else:
+        activities.append(ProfilerActivity.CUDA)
+    with profile(activities=activities, record_shapes=True) as prof:
+        result = tensor_parallel(args.iterations, args.number_of_transformer_layers, n_iter_grad_sync, warmup=False)
+    prof.export_chrome_trace(f"{args.log_directory}/{args.trace}-{rank}-of-{world_size}.json")
+else:
+    result = tensor_parallel(args.iterations, args.number_of_transformer_layers, n_iter_grad_sync, warmup=False)
 
 T_dict_individual = result.T_dict_individual
 T_dict_total = result.T_dict_total
