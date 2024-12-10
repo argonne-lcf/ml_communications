@@ -1,8 +1,8 @@
 #!/bin/bash -x
-#PBS -l select=4
+#PBS -l select=1
 #PBS -l place=scatter
-#PBS -l walltime=00:20:00
-#PBS -q debug-scaling
+#PBS -l walltime=00:05:00
+#PBS -q debug
 #PBS -A datascience
 #PBS -l filesystems=home:eagle
 #PBS -k doe
@@ -28,8 +28,8 @@ TP_DEGREE=4
 TIMING_LOOPS=4
 WARMUPS=4
 PRECISION="float32"
-N_LAYERS=80
-TRIAL=2
+N_LAYERS=1
+TRIAL=1
 
 ALGO=Tree
 
@@ -67,7 +67,7 @@ echo "========= CCL VARIABLES =============="
 printenv | grep "CCL"
 echo "========= CCL VARIABLES =============="
 
-RUN_ID=polaris_tensor_parallel_ENV_PHB_TP${TP_DEGREE}_NO_SP_NCCL_ALGO${ALGO}_LAYERS${N_LAYERS}_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
+RUN_ID=polaris_tensor_parallel_MAT_SHAPES_ENV_PHB_TP${TP_DEGREE}_NO_SP_NCCL_ALGO${ALGO}_LAYERS${N_LAYERS}_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
 LOG_DIR=${WORK_DIR}/run_scripts/outdir/logs 
 
 echo "${RUN_ID}"
