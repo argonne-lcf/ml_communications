@@ -28,8 +28,10 @@ TP_DEGREE=4
 TIMING_LOOPS=4
 WARMUPS=4
 PRECISION="float32"
-N_LAYERS=80
+N_LAYERS=1
 TRIAL=1
+
+ALGO=Ring
 
 # MPI and OpenMP settings
 NNODES=`wc -l < $PBS_NODEFILE`
@@ -51,6 +53,8 @@ export FI_CXI_DISABLE_HOST_REGISTER=1
 export FI_MR_CACHE_MONITOR=userfaultfd
 export FI_CXI_DEFAULT_CQ_SIZE=131072
 
+export NCCL_ALGO=${ALGO}
+
 #unset NCCL_COLLNET_ENABLE NCCL_CROSS_NIC NCCL_NET NCCL_NET_GDR_LEVEL
 
 echo "========= ENVIRONMENT VARIABLES ======="
@@ -63,7 +67,7 @@ echo "========= CCL VARIABLES =============="
 printenv | grep "CCL"
 echo "========= CCL VARIABLES =============="
 
-RUN_ID=polaris_profile_tensor_parallel_ENV_PHB_TP${TP_DEGREE}_NO_SP_NOWARMUPS_LAYERS${N_LAYERS}_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
+RUN_ID=polaris_profile_tensor_parallel_NO_SYNC_ENV_PHB_TP${TP_DEGREE}_NO_SP_NCCL_ALGO${ALGO}_NOWARMUPS_LAYERS${N_LAYERS}_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
 LOG_DIR=${WORK_DIR}/run_scripts/outdir/logs 
 
 echo "${RUN_ID}"

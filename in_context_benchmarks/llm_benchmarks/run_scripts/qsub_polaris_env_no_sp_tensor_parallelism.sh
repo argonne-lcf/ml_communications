@@ -1,5 +1,5 @@
 #!/bin/bash -x
-#PBS -l select=1
+#PBS -l select=4
 #PBS -l place=scatter
 #PBS -l walltime=00:20:00
 #PBS -q debug-scaling
@@ -29,7 +29,9 @@ TIMING_LOOPS=4
 WARMUPS=4
 PRECISION="float32"
 N_LAYERS=80
-TRIAL=7
+TRIAL=2
+
+ALGO=Tree
 
 # MPI and OpenMP settings
 NNODES=`wc -l < $PBS_NODEFILE`
@@ -51,6 +53,8 @@ export FI_CXI_DISABLE_HOST_REGISTER=1
 export FI_MR_CACHE_MONITOR=userfaultfd
 export FI_CXI_DEFAULT_CQ_SIZE=131072
 
+export NCCL_ALGO=${ALGO}
+
 #unset NCCL_COLLNET_ENABLE NCCL_CROSS_NIC NCCL_NET NCCL_NET_GDR_LEVEL
 
 echo "========= ENVIRONMENT VARIABLES ======="
@@ -63,7 +67,7 @@ echo "========= CCL VARIABLES =============="
 printenv | grep "CCL"
 echo "========= CCL VARIABLES =============="
 
-RUN_ID=polaris_tensor_parallel_ENV_PHB_TP${TP_DEGREE}_NO_SP_LAYERS${N_LAYERS}_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
+RUN_ID=polaris_tensor_parallel_ENV_PHB_TP${TP_DEGREE}_NO_SP_NCCL_ALGO${ALGO}_LAYERS${N_LAYERS}_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
 LOG_DIR=${WORK_DIR}/run_scripts/outdir/logs 
 
 echo "${RUN_ID}"
@@ -74,7 +78,7 @@ echo "$(timestamp): Before mpiexec."
 mpiexec -n ${NRANKS} -ppn ${NRANKS_PER_NODE} -l --line-buffer \
 python ${WORK_DIR}/tensor_parallel_with_gradient_synchronization.py -n_layers ${N_LAYERS} \
 -tp_degree=${TP_DEGREE} --warmup_iterations ${WARMUPS} --iterations=${TIMING_LOOPS} --precision ${PRECISION} \
---logging --log_directory=${LOG_DIR} --log_file=${RUN_ID}.log --save
+--logging --log_directory=${LOG_DIR} --log_file=${RUN_ID}.log 
 
 echo "$(timestamp): Finished the workload."
 
