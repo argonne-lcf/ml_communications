@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 *.npy
+outdir
 
 #logs
 in_context_benchmarks/llm_benchmarks/logs/
