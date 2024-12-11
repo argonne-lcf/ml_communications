@@ -1,13 +1,13 @@
 #!/bin/bash -x
-#PBS -l select=8
+#PBS -l select=2
 #PBS -l place=scatter
-#PBS -l walltime=00:30:00
+#PBS -l walltime=00:10:00
 #PBS -q workq
 #PBS -A Aurora_deployment
 #PBS -l filesystems=home:flare
 #PBS -k doe
-#PBS -e /home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks/run_scripts/errordir
-#PBS -o /home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks/run_scripts/outdir
+#PBS -e /home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks/run_scripts/errordir_sunspot
+#PBS -o /home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks/run_scripts/outdir_sunspot
 #PBS -j oe
 #PBS -N LLM_test_8x12 
 
@@ -28,6 +28,7 @@ TP_DEGREE=12
 WARMUPS=4
 TIMING_LOOPS=4
 PRECISION="float32"
+N_LAYERS=1
 TRIAL=1
 
 # MPI and OpenMP settings
@@ -56,7 +57,7 @@ echo "========= CCL VARIABLES =============="
 printenv | grep "CCL"
 echo "========= CCL VARIABLES =============="
 
-RUN_ID=sunspot_tensor_parallel_TP${TP_DEGREE}_NO_SP_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
+RUN_ID=sunspot_tensor_parallel_TP${TP_DEGREE}_NO_SP_LAYERS${N_LAYERS}_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
 
 echo "${RUN_ID}"
 
@@ -65,7 +66,7 @@ echo "$(timestamp): Before mpiexec."
 
 mpiexec --pmi=pmix -n ${NRANKS} -ppn ${NRANKS_PER_NODE} -l --line-buffer --cpu-bind ${CPU_AFFINITY} --mem-bind ${MEM_BIND} \
 ${LOG_WRAPPER} python ${WORK_DIR}/tensor_parallel_with_gradient_synchronization.py -dvc "xpu" \
--tp_degree=${TP_DEGREE} --warmup_iterations ${WARMUPS} --iterations=${TIMING_LOOPS} --precision ${PRECISION} \
---logging --log_directory=${WORK_DIR}/run_scripts/outdir/logs --log_file=${RUN_ID}.log
+-tp_degree=${TP_DEGREE} --warmup_iterations ${WARMUPS} --iterations=${TIMING_LOOPS} --precision ${PRECISION} -n_layers ${N_LAYERS} \
+--logging --log_directory=${WORK_DIR}/run_scripts/outdir_sunspot/logs --log_file=${RUN_ID}.log
 
 echo "$(timestamp): Finished the workload."

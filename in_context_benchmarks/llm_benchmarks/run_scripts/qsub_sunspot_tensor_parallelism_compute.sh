@@ -6,8 +6,8 @@
 #PBS -A Aurora_deployment
 #PBS -l filesystems=home:flare
 #PBS -k doe
-#PBS -e /home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks/run_scripts/errordir
-#PBS -o /home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks/run_scripts/outdir
+#PBS -e /home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks/run_scripts/errordir_sunspot
+#PBS -o /home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks/run_scripts/outdir_sunspot
 #PBS -j oe
 #PBS -N LLM_test_8x12 
 

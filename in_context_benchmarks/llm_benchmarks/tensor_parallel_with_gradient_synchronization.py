@@ -86,7 +86,10 @@ elif args.precision == "bfloat16":
     data_type_multiplier = 16 ## 16 Bits
 
 @trace_func
-def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync, warmup=False):
+def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync, 
+                    input, partial_input, partial_interim2, 
+                    partial_interim4, attn_W_QKV, attn_WO, 
+                    mat_h_4h, mat_4h_h, allreduce_grad, warmup=False):
     # Define how many variables you want
     operations = ["allgather_1", "QKV", "WO", "reduce_scatter_1",
                   "allreduce_1", "allgather_2", "H_4H", "4H_H", "reduce_scatter_2", 
@@ -134,11 +137,11 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync, warmup=False):
                     T_dict_individual["T_allgather_1"][m][i] = (end-start)
                     t_ag_1 += end - start
             start = time.perf_counter_ns()
-            if rank == 0:
-                logging.info("Input Shape = {input.shape}")
+            #if rank == 0:
+            logging.info(f"Input Shape = {input.shape}")
             interim1 = torch.matmul(input, attn_W_QKV.t())
-            if rank == 0:
-                logging.info("Interim 1 Shape = {interim1.shape}")
+            #if rank == 0:
+            logging.info(f"Interim 1 Shape = {interim1.shape}")
             synchronize(args.device)
             end = time.perf_counter_ns()
             if warmup:
@@ -149,8 +152,8 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync, warmup=False):
                 t_qkv += end-start
             start = end
             interim2 = torch.matmul(interim1, attn_WO.t())
-            if rank == 0:
-                logging.info("Interim 2 Shape = {interim2.shape}")
+            #if rank == 0:
+            logging.info(f"Interim 2 Shape = {interim2.shape}")
             synchronize(args.device)
             end = time.perf_counter_ns()
             if warmup:
@@ -203,8 +206,8 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync, warmup=False):
                     t_ag_2 += end-start
             start = time.perf_counter_ns()
             interim3 = torch.matmul(interim2, mat_h_4h.t())
-            if rank == 0:
-                logging.info("Interim 3 Shape = {interim3.shape}")
+            #if rank == 0:
+            logging.info(f"Interim 3 Shape = {interim3.shape}")
             synchronize(args.device)
             end = time.perf_counter_ns()
             if warmup:
@@ -215,8 +218,8 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync, warmup=False):
                 t_h_4h += end-start
             start = end
             interim4 = torch.matmul(interim3, mat_4h_h.t())
-            if rank == 0:
-                logging.info("Interim 4 Shape = {interim4.shape}")
+            #if rank == 0:
+            logging.info(f"Interim 4 Shape = {interim4.shape}")
             synchronize(args.device)
             end = time.perf_counter_ns()
             if warmup:
@@ -439,6 +442,12 @@ M = 1
 all_gather_buffer = torch.zeros([S, M, H], dtype=data_type, device=get_device_string(args.device))
 SP=args.sequence_parallel_switch
 
+partial_input = torch.ones([S//TP, M, H], dtype=data_type, device=get_device_string(args.device))
+input = torch.ones([S, M, H], dtype=data_type, device=get_device_string(args.device))
+partial_interim2 = torch.zeros([S//TP, M, H], dtype=data_type, device=get_device_string(args.device))
+partial_interim4 = torch.zeros([S//TP, M, H], dtype=data_type, device=get_device_string(args.device))
+
+"""
 if SP:
     partial_input = torch.ones([S//TP, M, H], dtype=data_type, device=get_device_string(args.device))
     input = torch.ones([S, M, H], dtype=data_type, device=get_device_string(args.device))
@@ -446,6 +455,7 @@ if SP:
     partial_interim4 = torch.zeros([S//TP, M, H], dtype=data_type, device=get_device_string(args.device)) 
 else:
     input = torch.ones([S, M, H], dtype=data_type, device=get_device_string(args.device))
+"""
 #logging.info(f"Input shape = {input.shape}")
 attn_W_QKV = torch.ones(
         H//TP,
@@ -497,10 +507,22 @@ if args.trace is not None:
     else:
         activities.append(ProfilerActivity.CUDA)
     with profile(activities=activities, record_shapes=True) as prof:
-        result = tensor_parallel(args.iterations, args.number_of_transformer_layers, n_iter_grad_sync, warmup=False)
+        result = tensor_parallel(args.iterations, args.number_of_transformer_layers, n_iter_grad_sync, 
+                                 input=input, partial_input=partial_input, partial_interim2=partial_interim2, 
+                                 partial_interim4=partial_interim4, attn_W_QKV=attn_W_QKV, attn_WO=attn_WO, 
+                                 mat_h_4h=mat_h_4h, 
+                                 mat_4h_h=mat_4h_h, allreduce_grad=allreduce_grad, warmup=False)
     prof.export_chrome_trace(f"{args.log_directory}/{args.trace}-{rank}-of-{world_size}.json")
 else:
-    result = tensor_parallel(args.iterations, args.number_of_transformer_layers, n_iter_grad_sync, warmup=False)
+    tensor_parallel(args.iterations, args.number_of_transformer_layers, n_iter_grad_sync, 
+                             input=input, partial_input=partial_input, partial_interim2=partial_interim2, 
+                             partial_interim4=partial_interim4, attn_W_QKV=attn_W_QKV, attn_WO=attn_WO,
+                             mat_h_4h=mat_h_4h, mat_4h_h=mat_4h_h, allreduce_grad=allreduce_grad, warmup=True)
+
+    result = tensor_parallel(args.iterations, args.number_of_transformer_layers, n_iter_grad_sync, 
+                             input=input, partial_input=partial_input, partial_interim2=partial_interim2, 
+                             partial_interim4=partial_interim4, attn_W_QKV=attn_W_QKV, attn_WO=attn_WO,
+                             mat_h_4h=mat_h_4h, mat_4h_h=mat_4h_h, allreduce_grad=allreduce_grad, warmup=False)
 
 T_dict_individual = result.T_dict_individual
 T_dict_total = result.T_dict_total
