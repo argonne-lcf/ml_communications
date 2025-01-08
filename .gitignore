@@ -4,9 +4,15 @@ __pycache__/
 *.npy
 outdir_sunspot
 errordir_sunspot
+outdir_aurora
+errordir_aurora
 
 #logs
 in_context_benchmarks/llm_benchmarks/logs
+in_context_benchmarks/llm_benchmarks/run_scripts/outdir_aurora
+in_context_benchmarks/llm_benchmarks/run_scripts/outdir_aurora/logs
+in_context_benchmarks/llm_benchmarks/run_scripts/outdir_aurora/logs/results
+in_context_benchmarks/llm_benchmarks/run_scripts/errordir_aurora
 in_context_benchmarks/llm_benchmarks/run_scripts/outdir_sunspot
 in_context_benchmarks/llm_benchmarks/run_scripts/outdir_sunspot/logs
 in_context_benchmarks/llm_benchmarks/run_scripts/outdir_sunspot/logs/results

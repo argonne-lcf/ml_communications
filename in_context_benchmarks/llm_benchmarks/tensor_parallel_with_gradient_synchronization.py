@@ -138,10 +138,10 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
                     t_ag_1 += end - start
             start = time.perf_counter_ns()
             #if rank == 0:
-            logging.info(f"Input Shape = {input.shape}")
+            #logging.info(f"Input Shape = {input.shape}")
             interim1 = torch.matmul(input, attn_W_QKV.t())
             #if rank == 0:
-            logging.info(f"Interim 1 Shape = {interim1.shape}")
+            #logging.info(f"Interim 1 Shape = {interim1.shape}")
             synchronize(args.device)
             end = time.perf_counter_ns()
             if warmup:
@@ -153,7 +153,7 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
             start = end
             interim2 = torch.matmul(interim1, attn_WO.t())
             #if rank == 0:
-            logging.info(f"Interim 2 Shape = {interim2.shape}")
+            #logging.info(f"Interim 2 Shape = {interim2.shape}")
             synchronize(args.device)
             end = time.perf_counter_ns()
             if warmup:
@@ -207,7 +207,7 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
             start = time.perf_counter_ns()
             interim3 = torch.matmul(interim2, mat_h_4h.t())
             #if rank == 0:
-            logging.info(f"Interim 3 Shape = {interim3.shape}")
+            #logging.info(f"Interim 3 Shape = {interim3.shape}")
             synchronize(args.device)
             end = time.perf_counter_ns()
             if warmup:
@@ -219,7 +219,7 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
             start = end
             interim4 = torch.matmul(interim3, mat_4h_h.t())
             #if rank == 0:
-            logging.info(f"Interim 4 Shape = {interim4.shape}")
+            #logging.info(f"Interim 4 Shape = {interim4.shape}")
             synchronize(args.device)
             end = time.perf_counter_ns()
             if warmup:
