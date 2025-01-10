@@ -1,7 +1,7 @@
 #!/bin/bash -x
 #PBS -l select=4
 #PBS -l place=scatter
-#PBS -l walltime=00:30:00
+#PBS -l walltime=00:10:00
 #PBS -q debug-scaling
 #PBS -A datascience
 #PBS -l filesystems=home:eagle
@@ -67,7 +67,7 @@ echo "========= CCL VARIABLES =============="
 printenv | grep "CCL"
 echo "========= CCL VARIABLES =============="
 
-RUN_ID=polaris_profile_tensor_parallel_NO_SYNC_ENV_PHB_TP${TP_DEGREE}_NO_SP_NCCL_ALGO${ALGO}_NOWARMUPS_LAYERS${N_LAYERS}_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
+RUN_ID=polaris_profile_tensor_parallel_CB_ENV_PHB_TP${TP_DEGREE}_NO_SP_NCCL_ALGO${ALGO}_NOWARMUPS_LAYERS${N_LAYERS}_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
 LOG_DIR=${WORK_DIR}/run_scripts/outdir/logs 
 
 echo "${RUN_ID}"
@@ -75,7 +75,7 @@ echo "${RUN_ID}"
 
 echo "$(timestamp): Before mpiexec."
 
-mpiexec -n ${NRANKS} -ppn ${NRANKS_PER_NODE} -l --line-buffer \
+mpiexec -n ${NRANKS} -ppn ${NRANKS_PER_NODE} -l --line-buffer --cpu-bind verbose,list:0,8,16,24 \
 python ${WORK_DIR}/tensor_parallel_with_gradient_synchronization.py -n_layers ${N_LAYERS} \
 -tp_degree=${TP_DEGREE} --iterations=${TIMING_LOOPS} --precision ${PRECISION} \
 --logging --log_directory=${LOG_DIR} --log_file=${RUN_ID}.log --trace ${RUN_ID} 
