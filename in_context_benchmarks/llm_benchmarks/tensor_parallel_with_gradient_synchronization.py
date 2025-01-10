@@ -504,6 +504,7 @@ if args.trace is not None:
     activities=[ProfilerActivity.CPU]
     if args.device == "xpu":
         activities.append(ProfilerActivity.XPU)
+        #pass
     else:
         activities.append(ProfilerActivity.CUDA)
     with profile(activities=activities, record_shapes=True) as prof:
