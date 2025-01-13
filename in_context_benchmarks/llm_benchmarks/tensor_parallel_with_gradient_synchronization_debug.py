@@ -9,6 +9,7 @@ from collections import namedtuple
 
 import torch
 import numpy as np
+np.set_printoptions(suppress=True)
 from torch.profiler import profile, record_function, ProfilerActivity
 
 #import intel_extension_for_pytorch as ipex  # noqa: F401 # type: ignore
@@ -99,10 +100,11 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
     # Define how many variables you want
     operations = ["allgather_1", "QKV", "WO", "reduce_scatter_1",
                   "allreduce_1", "allgather_2", "H_4H", "4H_H", "reduce_scatter_2", 
-                  "allreduce_2", "grad_sync", "timing_loop"]
+                  "allreduce_2", "grad_sync", "timing_loop", "tp_sync", 
+                  "dp_sync_begin", "dp_sync_end"]
 
     # Initialize the variables using a dictionary
-    T_dict_individual = {f'T_{operation}': np.zeros((N_timing_loop, n_layers)) for operation in operations[:-2]}
+    T_dict_individual = {f'T_{operation}': np.zeros((N_timing_loop, n_layers)) for operation in operations[:-5]}
     T_dict_total = {f'T_{operation}': np.zeros(N_timing_loop) for operation in operations}
     T_grad_sync_individual = np.zeros((N_timing_loop, n_iter_grad_sync))
 
@@ -127,6 +129,13 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
         t_ardc_2 = 0.0 # dummy variable for timing the second allreduce
         t_grad = 0.0 # dummy variable for timing the gradient sync. allreduce
         timing_loop_time = 0.0
+        if args.barrier:
+            start = time.perf_counter_ns()
+            torch.distributed.barrier()
+            end = time.perf_counter_ns()
+            T_dict_total["T_tp_sync"][m] = ((end - start) / 1e6)
+        else:
+            pass
         for i in range(n_layers):
             start = time.perf_counter_ns()
             if SP:
@@ -271,11 +280,14 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
         if args.no_grad_sync:
             pass
         else:
+            if args.barrier:
+                start = time.perf_counter_ns()
+                torch.distributed.barrier()
+                end = time.perf_counter_ns()
+                T_dict_total["T_dp_sync_begin"][m] = ((end - start) / 1e6)
+            else:
+                pass
             for k in range(n_iter_grad_sync):
-                if args.barrier:
-                    torch.distributed.barrier()
-                else:
-                    pass
                 start = time.perf_counter_ns()
                 torch.distributed.all_reduce(
                     allreduce_grad, group=dp_group
@@ -288,6 +300,13 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
                 else:
                     T_grad_sync_individual[m][k] = (end - start)
                     t_grad += end-start
+            if args.barrier:
+                start = time.perf_counter_ns()
+                torch.distributed.barrier()
+                end = time.perf_counter_ns()
+                T_dict_total["T_dp_sync_end"][m] = ((end - start) / 1e6)
+            else:
+                pass
             T_dict_total["T_grad_sync"][m] = (t_grad / 1e6 )
             synchronize(args.device)
         T_dict_total["T_allgather_1"][m] = (t_ag_1 / 1e6 )
@@ -711,6 +730,17 @@ if rank == 0:
     logging.info("Grad Sync Allreduce over DP groups takes max. {max_time:.4f} ms,  min. {min_time:.4f} ms, avg. {avg_time:.4f} ms"
     .format(max_time=np.max(T_dict_total['T_grad_sync']), 
     min_time=np.min(T_dict_total['T_grad_sync']), avg_time=np.mean(T_dict_total['T_grad_sync'])))
+    logging.info("TP Sync takes max. {max_time:.4f} ms,  min. {min_time:.4f} ms, avg. {avg_time:.4f} ms"
+    .format(max_time=np.max(T_dict_total['T_tp_sync']), 
+    min_time=np.min(T_dict_total['T_tp_sync']), avg_time=np.mean(T_dict_total['T_tp_sync'])))
+    logging.info("DP Sync Barrier at the beginning takes max. {max_time:.4f} ms,  min. {min_time:.4f} ms, avg. {avg_time:.4f} ms"
+    .format(max_time=np.max(T_dict_total['T_dp_sync_begin']), 
+    min_time=np.min(T_dict_total['T_dp_sync_begin']), avg_time=np.mean(T_dict_total['T_dp_sync_begin'])))
+    logging.info("DP Sync Barrier at the end takes max. {max_time:.4f} ms,  min. {min_time:.4f} ms, avg. {avg_time:.4f} ms"
+    .format(max_time=np.max(T_dict_total['T_dp_sync_end']), 
+    min_time=np.min(T_dict_total['T_dp_sync_end']), avg_time=np.mean(T_dict_total['T_dp_sync_end'])))
+
+
     logging.info(f"Total time taken for {args.iterations} timing loops = {sum(T_dict_total['T_timing_loop'])} ms")
     ###################
     logging.info("\n==== ALL RESULTS ====")
@@ -725,6 +755,9 @@ if rank == 0:
     logging.info(f"Second reduce scatter total times from timing loop = {T_dict_total['T_reduce_scatter_2']} ms")
     logging.info(f"Second allreduce total times from timing loop = {T_dict_total['T_allreduce_2']} ms")
     logging.info(f"Grad Sync Total times from timing loop = {T_dict_total['T_grad_sync']} ms")
+    logging.info(f"TP Sync times from timing loop = {T_dict_total['T_tp_sync']} ms")
+    logging.info(f"DP Sync Barrier at the beginning times from timing loop = {T_dict_total['T_dp_sync_begin']} ms")
+    logging.info(f"DP Sync Barrier at the end times from timing loop = {T_dict_total['T_dp_sync_end']} ms")
     logging.info(f"Timing loop times = {T_dict_total['T_timing_loop']}")
     logging.info(f"==== Finished Running ====")
     if args.save:
