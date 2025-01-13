@@ -53,6 +53,12 @@ parser.add_argument("-f", "--log_file", help="Output file name",
 parser.add_argument("-dir", "--log_directory", help="Output file path",
                     type=str, default="logs/")
 
+parser.add_argument("--tg1", help="TP with first half of GPUs", action='store_true')
+parser.add_argument("--tg2", help="TP with second half of GPUs", action='store_true')
+parser.add_argument("--no_grad_sync", help="Do NOT perform gradient synchronization over dp groups", action='store_true')
+parser.add_argument("--barrier", help="Put a torch barrier before the grad sync allreduce", action='store_true')
+
+
 parser.add_argument("--logging", help="Switch logging on", action='store_true')
 parser.add_argument("--save", help="Save detail results in npy format", action='store_true') ## Generates huge files, use with caution
 parser.add_argument("--trace", default=None, type=str)
@@ -139,11 +145,11 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
                     t_ag_1 += end - start
             start = time.perf_counter_ns()
             #if rank == 0:
-            logging.info(f"Input Shape = {input.shape}")
-            #interim1 = torch.matmul(input, attn_W_QKV.t())
-            interim1 = interim1_proxy
+            #logging.info(f"Input Shape = {input.shape}")
+            interim1 = torch.matmul(input, attn_W_QKV.t())
+            #interim1 = interim1_proxy
             #if rank == 0:
-            logging.info(f"Interim 1 Shape = {interim1.shape}")
+            #logging.info(f"Interim 1 Shape = {interim1.shape}")
             synchronize(args.device)
             end = time.perf_counter_ns()
             if warmup:
@@ -153,10 +159,10 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
                 T_dict_individual["T_QKV"][m][i] = (end - start)
                 t_qkv += end-start
             start = end
-            #interim2 = torch.matmul(interim1, attn_WO.t())
-            interim2 = interim2_proxy
+            interim2 = torch.matmul(interim1, attn_WO.t())
+            #interim2 = interim2_proxy
             #if rank == 0:
-            logging.info(f"Interim 2 Shape = {interim2.shape}")
+            #logging.info(f"Interim 2 Shape = {interim2.shape}")
             synchronize(args.device)
             end = time.perf_counter_ns()
             if warmup:
@@ -208,10 +214,10 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
                     T_dict_individual["T_allgather_2"][m][i] = (end - start)
                     t_ag_2 += end-start
             start = time.perf_counter_ns()
-            #interim3 = torch.matmul(interim2, mat_h_4h.t())
-            interim3 = interim3_proxy
+            interim3 = torch.matmul(interim2, mat_h_4h.t())
+            #interim3 = interim3_proxy
             #if rank == 0:
-            logging.info(f"Interim 3 Shape = {interim3.shape}")
+            #logging.info(f"Interim 3 Shape = {interim3.shape}")
             synchronize(args.device)
             end = time.perf_counter_ns()
             if warmup:
@@ -221,10 +227,10 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
                 T_dict_individual["T_H_4H"][m][i] = (end - start)
                 t_h_4h += end-start
             start = end
-            #interim4 = torch.matmul(interim3, mat_4h_h.t())
-            interim4 = interim4_proxy
+            interim4 = torch.matmul(interim3, mat_4h_h.t())
+            #interim4 = interim4_proxy
             #if rank == 0:
-            logging.info(f"Interim 4 Shape = {interim4.shape}")
+            #logging.info(f"Interim 4 Shape = {interim4.shape}")
             synchronize(args.device)
             end = time.perf_counter_ns()
             if warmup:
@@ -262,21 +268,28 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
                     T_dict_individual["T_allreduce_2"][m][i] = (end - start)
                     t_ardc_2 += end-start
         synchronize(args.device)
-        for k in range(n_iter_grad_sync):
-            start = time.perf_counter_ns()
-            torch.distributed.all_reduce(
-                allreduce_grad, group=dp_group
-            )
+        if args.no_grad_sync:
+            pass
+        else:
+            for k in range(n_iter_grad_sync):
+                if args.barrier:
+                    torch.distributed.barrier()
+                else:
+                    pass
+                start = time.perf_counter_ns()
+                torch.distributed.all_reduce(
+                    allreduce_grad, group=dp_group
+                )
+                synchronize(args.device)
+                end = time.perf_counter_ns()
+                if warmup:
+                    T_grad_sync_individual[m][k] = 0.0
+                    t_grad = 0.0
+                else:
+                    T_grad_sync_individual[m][k] = (end - start)
+                    t_grad += end-start
+            T_dict_total["T_grad_sync"][m] = (t_grad / 1e6 )
             synchronize(args.device)
-            end = time.perf_counter_ns()
-            if warmup:
-                T_grad_sync_individual[m][k] = 0.0
-                t_grad = 0.0
-            else:
-                T_grad_sync_individual[m][k] = (end - start)
-                t_grad += end-start
-        T_dict_total["T_grad_sync"][m] = (t_grad / 1e6 )
-        synchronize(args.device)
         T_dict_total["T_allgather_1"][m] = (t_ag_1 / 1e6 )
         T_dict_total["T_QKV"][m] = (t_qkv / 1e6 )
         T_dict_total["T_WO"][m] = (t_WO / 1e6 )
@@ -407,8 +420,35 @@ def get_tp_group(TP, world_size):
             tp_group=group
     return tp_group
 
+def get_tp_group_1(TP, world_size):
+    tp_group=None
+    for i in range(world_size//TP):
+        ranks = [j for j in range(i*TP,(i+1)*TP)][:TP//2]
+        if rank==0:
+            logging.info(f"TP group = {ranks}")
+        group = torch.distributed.new_group(ranks)
+        if rank in ranks:
+            tp_group=group
+    return tp_group
+
+def get_tp_group_2(TP, world_size):
+    tp_group=None
+    for i in range(world_size//TP):
+        ranks = [j for j in range(i*TP,(i+1)*TP)][TP//2:]
+        if rank==0:
+            logging.info(f"TP group = {ranks}")
+        group = torch.distributed.new_group(ranks)
+        if rank in ranks:
+            tp_group=group
+    return tp_group
+
 if TP is not None:
-    tp_group = get_tp_group(TP, world_size)
+    if args.tg1:
+        tp_group = get_tp_group_1(TP, world_size)
+    elif args.tg2:
+        tp_group = get_tp_group_2(TP, world_size)
+    else:
+        tp_group = get_tp_group(TP, world_size)
 else:
     TP = 1
     tp_group = get_tp_group(TP, world_size)
@@ -423,13 +463,30 @@ dp_switch = args.data_parallel_switch
 dp_group = None
 
 if dp_switch:
-    for i in range(TP):
-        ranks = [i for i in range(i,world_size,TP)]
-        if rank==0:
-            logging.info(f"DP group = {ranks}")
-        group = torch.distributed.new_group(ranks)
-        if rank in ranks:
-            dp_group=group
+    if args.tg1:
+        for i in range(TP//2):
+            ranks = [i for i in range(i,world_size,TP)]
+            if rank==0:
+                logging.info(f"DP group = {ranks}")
+            group = torch.distributed.new_group(ranks)
+            if rank in ranks:
+                dp_group=group
+    elif args.tg2:
+        for i in range(TP//2):
+            ranks = [i for i in range((i+TP//2),world_size,TP)]
+            if rank==0:
+                logging.info(f"DP group = {ranks}")
+            group = torch.distributed.new_group(ranks)
+            if rank in ranks:
+                dp_group=group
+    else:
+        for i in range(TP):
+            ranks = [i for i in range(i,world_size,TP)]
+            if rank==0:
+                logging.info(f"DP group = {ranks}")
+            group = torch.distributed.new_group(ranks)
+            if rank in ranks:
+                dp_group=group
 else:
     ranks = [i for i in range(0,world_size,TP)]
     dp_group = torch.distributed.new_group(ranks)
