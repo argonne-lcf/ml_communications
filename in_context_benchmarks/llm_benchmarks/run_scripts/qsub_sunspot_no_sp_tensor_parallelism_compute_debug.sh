@@ -29,7 +29,7 @@ TP_DEGREE=12
 TIMING_LOOPS=4
 PRECISION="float32"
 N_LAYERS=1
-TRIAL=4
+TRIAL=1
 
 # MPI and OpenMP settings
 NNODES=`wc -l < $PBS_NODEFILE`
@@ -57,7 +57,7 @@ echo "========= CCL VARIABLES =============="
 printenv | grep "CCL"
 echo "========= CCL VARIABLES =============="
 
-RUN_ID=sunspot_tensor_parallel_Barrier_TP${TP_DEGREE}_NO_SP_LAYERS${N_LAYERS}_TIMING_LOOPS${TIMING_LOOPS}_NOWARMUPS_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
+RUN_ID=sunspot_tensor_parallel_TG1_NoBarrier_TP${TP_DEGREE}_NO_SP_LAYERS${N_LAYERS}_TIMING_LOOPS${TIMING_LOOPS}_NOWARMUPS_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
 
 echo "${RUN_ID}"
 
@@ -66,7 +66,7 @@ echo "$(timestamp): Before mpiexec."
 
 mpiexec --pmi=pmix -n ${NRANKS} -ppn ${NRANKS_PER_NODE} -l --line-buffer --cpu-bind ${CPU_AFFINITY} --mem-bind ${MEM_BIND} \
 ${LOG_WRAPPER} python ${WORK_DIR}/tensor_parallel_with_gradient_synchronization_debug.py -dvc "xpu" \
--tp_degree=${TP_DEGREE} --barrier --iterations=${TIMING_LOOPS} --precision ${PRECISION} -n_layers ${N_LAYERS} \
+-tp_degree=${TP_DEGREE} --tg1 --iterations=${TIMING_LOOPS} --precision ${PRECISION} -n_layers ${N_LAYERS} \
 --logging --log_directory=${WORK_DIR}/run_scripts/outdir_sunspot/logs --log_file=${RUN_ID}.log
 
 echo "$(timestamp): Finished the workload."
