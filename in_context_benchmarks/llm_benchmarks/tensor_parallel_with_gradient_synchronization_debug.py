@@ -131,7 +131,7 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
         timing_loop_time = 0.0
         if args.barrier:
             start = time.perf_counter_ns()
-            torch.distributed.barrier()
+            torch.distributed.barrier(group=tp_group)
             end = time.perf_counter_ns()
             T_dict_total["T_tp_sync"][m] = ((end - start) / 1e6)
         else:
@@ -282,7 +282,7 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
         else:
             if args.barrier:
                 start = time.perf_counter_ns()
-                torch.distributed.barrier()
+                torch.distributed.barrier(group=dp_group)
                 end = time.perf_counter_ns()
                 T_dict_total["T_dp_sync_begin"][m] = ((end - start) / 1e6)
             else:
@@ -302,7 +302,7 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
                     t_grad += end-start
             if args.barrier:
                 start = time.perf_counter_ns()
-                torch.distributed.barrier()
+                torch.distributed.barrier(group=dp_group)
                 end = time.perf_counter_ns()
                 T_dict_total["T_dp_sync_end"][m] = ((end - start) / 1e6)
             else:
