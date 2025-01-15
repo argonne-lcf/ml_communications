@@ -29,14 +29,14 @@ TIMING_LOOPS=4
 #WARMUPS=4
 PRECISION="float32"
 N_LAYERS=1
-TRIAL=3
+TRIAL=4
 SOCKET=hsn0,hsn1
 
 ALGO=Ring
 
 # MPI and OpenMP settings
 NNODES=`wc -l < $PBS_NODEFILE`
-NRANKS_PER_NODE=4
+NRANKS_PER_NODE=2
 
 let NRANKS=${NNODES}*${NRANKS_PER_NODE}
 
@@ -44,9 +44,9 @@ module use /soft/modulefiles/
 module load conda/2024-04-29
 conda activate 
 
-export NCCL_NET_GDR_LEVEL=PHB
-export NCCL_CROSS_NIC=1
-export NCCL_COLLNET_ENABLE=1
+#export NCCL_NET_GDR_LEVEL=PHB
+#export NCCL_CROSS_NIC=1
+#export NCCL_COLLNET_ENABLE=1
 #export NCCL_NET="AWS Libfabric"
 #export LD_LIBRARY_PATH=/soft/libraries/aws-ofi-nccl/v1.9.1-aws/lib:$LD_LIBRARY_PATH
 #export LD_LIBRARY_PATH=/soft/libraries/hwloc/lib/:$LD_LIBRARY_PATH
@@ -58,7 +58,9 @@ export NCCL_ALGO=${ALGO}
 
 export NCCL_SOCKET_IFNAME=${SOCKET}
 
-#unset NCCL_COLLNET_ENABLE NCCL_CROSS_NIC NCCL_NET NCCL_NET_GDR_LEVEL
+export NCCL_DEBUG=INFO
+
+unset NCCL_COLLNET_ENABLE NCCL_CROSS_NIC NCCL_NET NCCL_NET_GDR_LEVEL
 
 echo "========= ENVIRONMENT VARIABLES ======="
 env
@@ -70,7 +72,7 @@ echo "========= CCL VARIABLES =============="
 printenv | grep "CCL"
 echo "========= CCL VARIABLES =============="
 
-RUN_ID=polaris_tensor_parallel_TG1_${SOCKET}_ENV_PHB_TP${TP_DEGREE}_NO_SP_NCCL_ALGO${ALGO}_NOWARMUPS_LAYERS${N_LAYERS}_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
+RUN_ID=polaris_tensor_parallel_Barrier_${SOCKET}_ENV_PHB_TP${TP_DEGREE}_NO_SP_NCCL_ALGO${ALGO}_NOWARMUPS_LAYERS${N_LAYERS}_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
 LOG_DIR=${WORK_DIR}/run_scripts/outdir/logs 
 
 echo "${RUN_ID}"
@@ -78,9 +80,9 @@ echo "${RUN_ID}"
 
 echo "$(timestamp): Before mpiexec."
 
-mpiexec -n ${NRANKS} -ppn ${NRANKS_PER_NODE} -l --line-buffer --cpu-bind verbose,list:0,8,16,24 \
+mpiexec -n ${NRANKS} -ppn ${NRANKS_PER_NODE} -l --line-buffer --cpu-bind verbose,list:0:8:16:24 \
 python ${WORK_DIR}/tensor_parallel_with_gradient_synchronization_debug.py -n_layers ${N_LAYERS} \
--tp_degree=${TP_DEGREE} --tg1 --iterations=${TIMING_LOOPS} --precision ${PRECISION} \
+-tp_degree=${TP_DEGREE} --barrier --iterations=${TIMING_LOOPS} --precision ${PRECISION} \
 --logging --log_directory=${LOG_DIR} --log_file=${RUN_ID}.log 
 
 echo "$(timestamp): Finished the workload."
