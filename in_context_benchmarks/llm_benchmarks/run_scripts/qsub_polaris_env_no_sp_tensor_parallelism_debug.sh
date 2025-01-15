@@ -29,14 +29,14 @@ TIMING_LOOPS=4
 #WARMUPS=4
 PRECISION="float32"
 N_LAYERS=1
-TRIAL=4
+TRIAL=3
 SOCKET=hsn0,hsn1
 
 ALGO=Ring
 
 # MPI and OpenMP settings
 NNODES=`wc -l < $PBS_NODEFILE`
-NRANKS_PER_NODE=2
+NRANKS_PER_NODE=4
 
 let NRANKS=${NNODES}*${NRANKS_PER_NODE}
 
@@ -44,9 +44,9 @@ module use /soft/modulefiles/
 module load conda/2024-04-29
 conda activate 
 
-#export NCCL_NET_GDR_LEVEL=PHB
-#export NCCL_CROSS_NIC=1
-#export NCCL_COLLNET_ENABLE=1
+export NCCL_NET_GDR_LEVEL=PHB
+export NCCL_CROSS_NIC=1
+export NCCL_COLLNET_ENABLE=1
 #export NCCL_NET="AWS Libfabric"
 #export LD_LIBRARY_PATH=/soft/libraries/aws-ofi-nccl/v1.9.1-aws/lib:$LD_LIBRARY_PATH
 #export LD_LIBRARY_PATH=/soft/libraries/hwloc/lib/:$LD_LIBRARY_PATH
@@ -58,9 +58,9 @@ export NCCL_ALGO=${ALGO}
 
 export NCCL_SOCKET_IFNAME=${SOCKET}
 
-export NCCL_DEBUG=INFO
+#export NCCL_DEBUG=INFO
 
-unset NCCL_COLLNET_ENABLE NCCL_CROSS_NIC NCCL_NET NCCL_NET_GDR_LEVEL
+#unset NCCL_COLLNET_ENABLE NCCL_CROSS_NIC NCCL_NET NCCL_NET_GDR_LEVEL
 
 echo "========= ENVIRONMENT VARIABLES ======="
 env
