@@ -24,19 +24,19 @@ echo "$(timestamp): Start of the Run, after exporting TZ Central"
 WORK_DIR=/home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks
 LOG_WRAPPER=${WORK_DIR}/log_wrapper.sh 
 
-TP_DEGREE=4
+TP_DEGREE=2
 TIMING_LOOPS=4
 #WARMUPS=4
 PRECISION="float32"
 N_LAYERS=1
-TRIAL=3
-SOCKET=hsn0,hsn1
+TRIAL=5
+SOCKET=hsn0
 
 ALGO=Ring
 
 # MPI and OpenMP settings
 NNODES=`wc -l < $PBS_NODEFILE`
-NRANKS_PER_NODE=4
+NRANKS_PER_NODE=2
 
 let NRANKS=${NNODES}*${NRANKS_PER_NODE}
 
@@ -58,7 +58,7 @@ export NCCL_ALGO=${ALGO}
 
 export NCCL_SOCKET_IFNAME=${SOCKET}
 
-#export NCCL_DEBUG=INFO
+export NCCL_DEBUG=INFO
 
 #unset NCCL_COLLNET_ENABLE NCCL_CROSS_NIC NCCL_NET NCCL_NET_GDR_LEVEL
 

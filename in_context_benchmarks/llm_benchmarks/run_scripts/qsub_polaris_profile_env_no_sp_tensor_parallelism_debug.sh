@@ -24,19 +24,19 @@ echo "$(timestamp): Start of the Run, after exporting TZ Central"
 WORK_DIR=/home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks
 LOG_WRAPPER=${WORK_DIR}/log_wrapper.sh 
 
-TP_DEGREE=4
+TP_DEGREE=2
 TIMING_LOOPS=4
 #WARMUPS=4
 PRECISION="float32"
 N_LAYERS=1
-TRIAL=3
-SOCKET=hsn0,hsn1
+TRIAL=1
+#SOCKET=hsn0,hsn1
 
 ALGO=Ring
 
 # MPI and OpenMP settings
 NNODES=`wc -l < $PBS_NODEFILE`
-NRANKS_PER_NODE=4
+NRANKS_PER_NODE=2
 
 let NRANKS=${NNODES}*${NRANKS_PER_NODE}
 
@@ -56,12 +56,12 @@ export FI_CXI_DEFAULT_CQ_SIZE=131072
 
 export NCCL_ALGO=${ALGO}
 
-export NCCL_SOCKET_IFNAME=${SOCKET}
+#export NCCL_SOCKET_IFNAME=${SOCKET}
 
 #unset NCCL_COLLNET_ENABLE NCCL_CROSS_NIC NCCL_NET NCCL_NET_GDR_LEVEL
 
 #CPU_BIND=verbose,list:24,16,8,0
-CPU_BIND=verbose,list:0,8,16,24
+CPU_BIND=verbose,list:0:8:16:24
 
 
 echo "========= ENVIRONMENT VARIABLES ======="
@@ -74,7 +74,7 @@ echo "========= CCL VARIABLES =============="
 printenv | grep "CCL"
 echo "========= CCL VARIABLES =============="
 
-RUN_ID=polaris_profile_tensor_parallel_Barrier_TG1_${SOCKET}_ENV_PHB_TP${TP_DEGREE}_NO_SP_NCCL_ALGO${ALGO}_NOWARMUPS_LAYERS${N_LAYERS}_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
+RUN_ID=polaris_profile_tensor_parallel_Barrier_NOSOCKET_ENV_PHB_TP${TP_DEGREE}_NO_SP_NCCL_ALGO${ALGO}_NOWARMUPS_LAYERS${N_LAYERS}_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
 LOG_DIR=${WORK_DIR}/run_scripts/outdir/logs 
 
 echo "${RUN_ID}"
@@ -84,7 +84,7 @@ echo "$(timestamp): Before mpiexec."
 
 mpiexec -n ${NRANKS} -ppn ${NRANKS_PER_NODE} -l --line-buffer --cpu-bind ${CPU_BIND} \
 python ${WORK_DIR}/tensor_parallel_with_gradient_synchronization_debug.py -n_layers ${N_LAYERS} \
--tp_degree=${TP_DEGREE} --tg1 --barrier --iterations=${TIMING_LOOPS} --precision ${PRECISION} \
+-tp_degree=${TP_DEGREE} --barrier --iterations=${TIMING_LOOPS} --precision ${PRECISION} \
 --logging --log_directory=${LOG_DIR} --log_file=${RUN_ID}.log --trace ${RUN_ID}
 
 echo "$(timestamp): Finished the workload."
