@@ -3,9 +3,9 @@ import argparse
 
 ## TODO: Implement combination of different parallelisms
 ## TODO: Implement head count asserts for ulysses, TP, etc. 
-## TODO: We get 59B not 70B. Missing 11B? Vocab and final linear head (2 * h * V => 2 * 8192 * 128_000 = 2B?)
 ## TODO: Implement peak memory size. Also memory saving compared to DP?
 ## TODO: GQA
+## TODO: need to reorganizing.
 
 ## Lamma 70B
 parser = argparse.ArgumentParser()
@@ -115,34 +115,328 @@ def get_async_comm_size_per_layer(h, h_):
 
     return DP, ZERO1, ZERO2, ZERO3
 
+def memory_fpt_vit(s, b, h, h_ffn, L, pa, k, hc, v, t, d, c, p, verbose=True):
+    ## TODO: separate vit and llm? currently it should be vit only
+    ## TODO: combine formula to get the simplified form but comment on each componenets that totals to the simplied form.
+    ## NOTE: Assuming ZeRO3 is used with DP, CP/SP
+
+    ## for 3dvit, replace pa**2 with pa**3
+    qkvo = 2*h**2 + 2*h**2*(k/hc)
+    norm = 2*s ## negligible
+    ffnn = 2*h*h_ffn
+    num_parameters_att = qkvo + norm + ffnn
+    patchify = pa**3 * h ## TODO: Change pa to cubed? 
+    final_norm = 2*s
+    # head = h*cl ## ignorable cl <<  h
+    num_parameters_vit = (num_parameters_att * L/p + patchify + final_norm) / t
+
+    swiglu = (h * h_ffn)
+    num_parameters_llm_specific = (2*h*v + h)
+    num_parameters_llm = ((num_parameters_att + swiglu) * L/p + num_parameters_llm_specific)/t
+    num_parameters_llm_without_swiglu = (num_parameters_att * L/p) + (num_parameters_llm_specific/t)
+
+    # activation_transformer = s*b*h*(6+4*k/a) + 2*s*b*(h+4*h_ffn) + 4*s*b*h ## w/swiglu but w/out embedding and lm head
+    # activation_transformer = 2*s*b*h+2*s*b*h_ffn + 6*s*b*h + 4*s*b*h ## w/out swiglu
+    att = (1 + 4/t) * b*s*h   # x, qkvo (activation of x is not parallelized)
+    norm = 2*b*s*h # need two because standardization, element-wise linear but easy to recompute? Am I using RMSNorm or LayerNorm?
+    # att = qkvo
+    ffnn = b*s*h + b*s*h_ffn/t ## only the intermediate input is paralleized by TP
+    num_act_elements = att + ffnn + norm ## 
+    # dropout = b*s*h ## Don't we need this?
+    num_bytes = 2
+    activation_transformer = num_bytes*num_act_elements #+ dropout
+    num_patchify = b*s*pa**2
+    # num_head = b*h ## ignorable
+    activation_vit_specific = num_bytes*num_patchify
+    activation_vit = (activation_transformer * L + activation_vit_specific) / (d * c)
+
+    ## llm (from the paper)
+    # term1 = (6 + 12/(d*c)) * (h*v/t + (2*L/p)*h**2 * ((1 + k/a + (3/2)*h_ffn/h) / t + 1/h))
+    # term2 = s*b*h/(t*c) * ((12 + 4*k/a + 8*h_ffn/h)*L + 8*p + 4*(1+v/h))
+    # term1 = 18 / (d*c) * num_parameters_llm
+
+    if hpz == 1:
+        term1 = 18 / (d*c) * num_parameters_vit 
+    else:
+        term1 = (16/(d*c) + 2/hpz) * num_parameters_vit
+    term2 = activation_vit
+    # term2 = s*b*h*(16 + 4*k/a + 8*h_ffn/h) ## from the paper
+    # result = term1 + term2 + peak_data_or_act_size
+    result = term1 + term2
+    # print(f"peak_data_or_act_size: {peak_data_or_act_size / 1024**3:.1f}")
+    num_gpus = t*d*p*c
+    # print(f"mem fpt per GPU (GiB): {result / 1000**3:.1f}")
+    mem_fpt_per_gpu = result / 1024**3
+    model_memory = term1 / 1024**3
+    activation_memory = term2 / 1024**3
+    if verbose:
+        print(f"num_parameters_llm (M): {num_parameters_llm / 1000**2:.1f}")
+        print(f"num_parameters_llm_without_swiglu (M): {num_parameters_llm_without_swiglu / 1000**2:.1f}")
+
+        print(f"num_parameters_vit (M): {num_parameters_vit / 1000**2 :.1f}")
+        print(f"term1 (model related memory in GiB)       : {term1 / 1024**3:.1f}")
+        print(f"term2 (activationi related memory in GiB) : {term2 / 1024**3:.1f}")
+        print(f"Total {num_gpus} GPUs, TP:{t}, DP{d}:, CP:{p}, PP:{c}")
+        print(f"mem fpt per GPU (GiB): {mem_fpt_per_gpu:.1f}")
+    return mem_fpt_per_gpu, model_memory, activation_memory
+
 if __name__ == "__main__":
-    num_flops_per_layer = round(get_num_flop_per_layer(B, s, h, h_) / 1000**4, 2)
-    num_param_per_layer = round(get_num_param_per_layer(h, h_) / 1000**2, 2)
-    total_num_param = round(get_num_param_per_layer(h, h_) * l / 1000**3, 2)
+    # h = 64**2
+    # h_ffn = h*4
+    # L = 32
+    b = 24
+    d = b ## MBS=1, change otherwise
+
+    s = 64**2 + 1
+    pa = 16
+    k = hc = 16
+    v = 0
+    t = 1
+    c = 1 ## context or ulysses..
+    p = 1
+    hpz = 1 ## Secondary Paritioning. Probably not working probably? 1: REGULAR else 
+    # cl = 10 ## num_classes
+
+    # ## ViT-TINY (10M)
+    # NLAYERS=6
+    # HSIZE=512
+    # FFN_HSIZE=512
+    ## ViT-BASE (86M)
+    # NLAYERS=12
+    # HSIZE=768
+    # FFN_HSIZE=3072
+    # ## VIT-LARGE (307M)
+    # NLAYERS=24
+    # HSIZE=1024
+    # FFN_HSIZE=4096
+    ## VIT-HUGE (632M)
+    # NLAYERS=32
+    # HSIZE=1280
+    # FFN_HSIZE=5120
+    # ## GIANT
+    # NLAYERS=48
+    # HSIZE=1664
+    # FFN_HSIZE=8192
+    ## ENORMOUS
+    # NLAYERS=56
+    # HSIZE=1792
+    # FFN_HSIZE=15360
+    # NUM_HEADS=16
+
+    ## 2.7B
+    # NLAYERS = 24
+    # HSIZE = 3072
+    # FFN_HSIZE = 4 * HSIZE
+
+    ## 5B
+    # NLAYERS = 28
+    # HSIZE = 64 * 60
+    # FFN_HSIZE = 4 * HSIZE
+
+    ## 5.6B
+    # NLAYERS = 28
+    # HSIZE = 64 * 64
+    # FFN_HSIZE = 4 * HSIZE
+
+    ## 6.4B
+    # NLAYERS=32
+    # HSIZE=4096
+    # FFN_HSIZE=4*HSIZE
+
+    ## 8.2B
+    # NLAYERS=32
+    # HSIZE=64 * 72
+    # HSIZE=12000
+    # FFN_HSIZE=4*HSIZE
+
+    ## 9.2B
+    # NLAYERS=36
+    # HSIZE=64 * 72
+    # FFN_HSIZE=4*HSIZE
+
+    ## 10.2B
+    # NLAYERS=36
+    # HSIZE=64 * 76
+    # FFN_HSIZE=4*HSIZE
+
+    ## 11.4B
+    # NLAYERS=38
+    # HSIZE=64 * 78
+    # FFN_HSIZE=4*HSIZE
     
-    print(f"\n")
-    print("Assuming Mixed-Precision ON") ## Q. Does everyone use mixed-precision always now? 
-    float_byte = 2 
-    SPU_comm, TP_comm, TPSP_comm = [round(comm * float_byte / 1000**3, 2) for comm in get_comm_size_per_layer(B, s, h, P)]
-    DP, ZERO1, ZERO2, ZERO3 = [round(async_comm * float_byte / 1000**3, 2) for async_comm in get_async_comm_size_per_layer(h, h_)]
+    ## VIT 13B (12.6)
+    # NLAYERS=40
+    # HSIZE=5120
+    # FFN_HSIZE=4*HSIZE
+    
+    ## 14B (13.8)
+    # NLAYERS=44
+    # HSIZE=64 * 80
+    # FFN_HSIZE=4*HSIZE
 
-    print(f"num params per layer (M): {num_param_per_layer}")
-    print(f"total num params (B): {total_num_param}")
-    print(f"Tflop count per layer (fp16): {num_flops_per_layer}")
-    # print(f"total Tflop count: {num_flops_per_layer * l}")
-    print(f"\n")
+    ## 16.7
+    # NLAYERS=44
+    # HSIZE=64 * 88
+    # FFN_HSIZE=4*HSIZE
 
-    print(f"Comm size per layer (GB): ")
-    print(f"    Ulysses comm: {SPU_comm}")
-    print(f"    TP comm: {TP_comm}")
-    print(f"    TPSP comm: {TPSP_comm}")
-    print(f"\n")
+    ## 19.9
+    # NLAYERS=44
+    # HSIZE=64 * 96
+    # FFN_HSIZE=4*HSIZE
 
-    print(f"Async comm size per layer (GB): ")
-    print(f"    DP(ZERO0): {DP}")
-    print(f"    DP/SP + ZERO1: {ZERO1}")
-    print(f"    DP/SP + ZERO2: {ZERO2}")
-    print(f"    DP/SP + ZERO3: {ZERO3}")
-    print(f"\n")
+    ## 21.8B
+    # NLAYERS=48
+    # HSIZE=6144
+    # FFN_HSIZE=24576
+
+    ## 24.5B
+    # NLAYERS=48
+    # HSIZE=64 * 102
+    # FFN_HSIZE= 4 * HSIZE
+
+    ## 25.5B
+    # NLAYERS=49
+    # HSIZE=64 * 104
+    # FFN_HSIZE= 4 * HSIZE
+
+    ## 27.6B
+    # NLAYERS=50
+    # HSIZE=64 * 106
+    # FFN_HSIZE= 4 * HSIZE
+
+    # ## 29.7B
+    # NLAYERS=50
+    # HSIZE=64 * 110
+    # FFN_HSIZE= 4 * HSIZE
+
+    ## 36.6B
+    NLAYERS=50
+    HSIZE=64 * 122
+    FFN_HSIZE= 4 * HSIZE
+
+    ## 42.4B
+    # NLAYERS=51
+    # HSIZE=64 * 130
+    # FFN_HSIZE= 4 * HSIZE
+
+    ## 46.4B
+    # NLAYERS=51
+    # HSIZE=64 * 136
+    # FFN_HSIZE= 4 * HSIZE
+
+    # ## 56.0B 
+    # NLAYERS=52
+    # HSIZE=64 * 148
+    # FFN_HSIZE= 4 * HSIZE
+
+    # ## 64.0B
+    # NLAYERS=53
+    # HSIZE=64 * 156
+    # FFN_HSIZE= 4 * HSIZE
+
+    ## 112B
+    # NLAYERS=56
+    # HSIZE=64 * 202
+    # FFN_HSIZE= 4 * HSIZE
+
+    # s = 2**2
+    L = NLAYERS
+    h = HSIZE
+    h_ffn = FFN_HSIZE
+
+    # model_size=13
+    # num_layers=40
+    # hidden_size=
+    # num_attn_heads=40
+    # lr=1.0e-4
+    # min_lr=1.0e-6
+    # init_std=0.008
+
+    # ## Llama 3.1 - 8.0B
+    # pa = 1
+    # s = 8192
+    # h = 4096
+    # h_ffn = 14336
+    # L = 32
+    # a = hc = 40
+    # v = 128_256
+    # k = 10
+    # d = 1
+    # t = 4
+    # c = 1
+    # p = 2
+    # b = 1
+
+    # L=32
+    # h=4096
+    # h_ffnh=4*h
+    # hc=32
+    # b=1024
+        # return result
+
+    # print(f"memory_fpt_vit(s, b, h, h_ffn, L, pa, a, k, hc, v, t, d, c, p): {memory_fpt_vit(s, b, h, h_ffn, L, pa, a, k, hc, v, t, d, c, p)}")
+
+    memory_fpt_vit(s, b, h, h_ffn, L, pa, k, hc, v, t, d, c, p, verbose=True)
+
+    ## Plotting scaling plot
+    # # b = d = 12
+    # # b = t = 12; d = 1
+    # scaling_range = range(1, 20_000, 100)
+    # mem_fpts = [memory_fpt_vit(s, b, h, h_ffn, L, pa, k, hc, v, t, d, c, p, verbose=False)[0] for h in scaling_range] ## overwite s
+    # model_memories = [memory_fpt_vit(s, b, h, h_ffn, L, pa, k, hc, v, t, d, c, p, verbose=False)[1] for h in scaling_range] ## overwite s
+    # activation_memories = [memory_fpt_vit(s, b, h, h_ffn, L, pa, k, hc, v, t, d, c, p, verbose=False)[2] for h in scaling_range] ## overwite s
+
+    # import matplotlib.pyplot as plt
+    # plt.plot(scaling_range, mem_fpts, label="Total Memory Footprint per GPU")
+    # plt.plot(scaling_range, model_memories, label="Model Memory")
+    # plt.plot(scaling_range, activation_memories, label="Activation Memory")
+
+    # # Add labels, title, and legend
+    # plt.xlabel("Hidden Dim")
+    # plt.ylabel("Memory Footprint per GPU")
+    # plt.axvline(x=4608, color='red', linestyle='--', linewidth=1.5)
+    # plt.text(2800, max(mem_fpts) * 0.3, "8B model", color='red', ha='center')
+    # # plt.text(4608, max(mem_fpts) * 0.9, "8B model", color='red', rotation=90, ha='center')
+    # plt.title("TP=12 with 4K Sequence")
+    # plt.legend()
+    # plt.savefig("analytical_scaling.png", format="PNG")
+
+
+
+    # print(f"num_parameters_w_swiglu: {num_parameters_w_swiglu // 1_000**2}")
+    # print(f"mem fpt per GPU: {result // (t * d * p * c) // 1024**3}")
+
+    ## term1 should be atleast 1? 
+    ## term2 is too small? 
+
+
+    # num_flops_per_layer = round(get_num_flop_per_layer(B, s, h, h_) / 1000**4, 2)
+    # num_param_per_layer = round(get_num_param_per_layer(h, h_) / 1000**2, 2)
+    # total_num_param = round(get_num_param_per_layer(h, h_) * l / 1000**3, 2)
+    
+    # print(f"\n")
+    # print("Assuming Mixed-Precision ON") ## Q. Does everyone use mixed-precision always now? 
+    # float_byte = 2 
+    # SPU_comm, TP_comm, TPSP_comm = [round(comm * float_byte / 1000**3, 2) for comm in get_comm_size_per_layer(B, s, h, P)]
+    # DP, ZERO1, ZERO2, ZERO3 = [round(async_comm * float_byte / 1000**3, 2) for async_comm in get_async_comm_size_per_layer(h, h_)]
+
+    # print(f"num params per layer (M): {num_param_per_layer}")
+    # print(f"total num params (B): {total_num_param}")
+    # print(f"Tflop count per layer (fp16): {num_flops_per_layer}")
+    # # print(f"total Tflop count: {num_flops_per_layer * l}")
+    # print(f"\n")
+
+    # print(f"Comm size per layer (GB): ")
+    # print(f"    Ulysses comm: {SPU_comm}")
+    # print(f"    TP comm: {TP_comm}")
+    # print(f"    TPSP comm: {TPSP_comm}")
+    # print(f"\n")
+
+    # print(f"Async comm size per layer (GB): ")
+    # print(f"    DP(ZERO0): {DP}")
+    # print(f"    DP/SP + ZERO1: {ZERO1}")
+    # print(f"    DP/SP + ZERO2: {ZERO2}")
+    # print(f"    DP/SP + ZERO3: {ZERO3}")
+    # print(f"\n")
 
     
