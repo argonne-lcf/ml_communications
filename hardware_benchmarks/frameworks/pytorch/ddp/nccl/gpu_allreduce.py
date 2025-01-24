@@ -6,12 +6,16 @@ import socket
 from mpi4py import MPI
 import argparse
 
+import logging
+
 parser = argparse.ArgumentParser(description="parse input arguments for the gpu allreduce benchmark")
 
 parser.add_argument("-dim", "--tensor_dimension_1d",
                         help="The size of the 1d tensor that is distributed accross the ranks per node.",
-                        type=int, default=4096)
+                        type=int, default=1073741824) ## ~1.07 GB per rank, consider Poalris with 4 GPUs
 args = parser.parse_args()
+
+logging.basicConfig(level="INFO")
 
 def main(tensor_dimension_1d):
     t1 = perf_counter_ns() 
@@ -65,6 +69,7 @@ def main(tensor_dimension_1d):
             return torch.device('cpu')
 
     device  = get_default_device()
+    torch.cuda.set_device(device)
 
     #dim_size=int(int(sys.argv[1])/4)
     dim_size=int(int(tensor_dimension_1d)/4)
@@ -85,24 +90,17 @@ def main(tensor_dimension_1d):
         total_elapsed += (t6-t5)
 
     if mpi_my_rank == 0:
-        print(f"Python Import time = {import_timer / 1000 / 1000 / 1000} s")
-        print(f"DDP initialization time = {init_timer / 1000 / 1000 / 1000} s")
-        print(f"Message size = {(dim_size * 4) / 1024 / 1024} MB")
-        print(f"Total time = {total_elapsed / 1000 / 1000 / 1000} s")
+        logging.info(f"Python Import time = {import_timer / 1000 / 1000 / 1000} s")
+        logging.info(f"DDP initialization time = {init_timer / 1000 / 1000 / 1000} s")
+        logging.info(f"Message size = {(dim_size * 4) / 1000 / 1000} MB")
+        logging.info(f"Total time = {total_elapsed / 1000 / 1000 / 1000} s")
         for idx, e in enumerate(elapsed1):
             if idx==0:
-                print(f"ALLREDUCE {idx} took {e / 1000 / 1000 / 1000} s")
+                logging.info(f"ALLREDUCE {idx} took {e / 1000 / 1000 / 1000} s")
             else:
-                print(f"ALLREDUCE {idx} took {e / 1000 / 1000} ms")
+                logging.info(f"ALLREDUCE {idx} took {e / 1000 / 1000} ms")
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="parse input arguments for the gpu allreduce benchmark")
-
-    parser.add_argument("-dim", "--tensor_dimension_1d",
-                        help="The size of the 1d tensor that is distributed accross the ranks per node.",
-                        type=int, default=4096)
-    args = parser.parse_args()
-    
+if __name__ == "__main__":    
     main(args.tensor_dimension_1d)
 
 
