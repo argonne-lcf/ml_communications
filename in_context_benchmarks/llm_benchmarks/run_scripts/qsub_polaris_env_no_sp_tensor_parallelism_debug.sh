@@ -24,19 +24,19 @@ echo "$(timestamp): Start of the Run, after exporting TZ Central"
 WORK_DIR=/home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks
 LOG_WRAPPER=${WORK_DIR}/log_wrapper.sh 
 
-TP_DEGREE=4
+TP_DEGREE=2
 TIMING_LOOPS=4
 #WARMUPS=4
 PRECISION="float32"
 N_LAYERS=1
-TRIAL=7
-SOCKET=hsn
+TRIAL=1
+#SOCKET=hsn
 
 ALGO=Ring
 
 # MPI and OpenMP settings
 NNODES=`wc -l < $PBS_NODEFILE`
-NRANKS_PER_NODE=4
+NRANKS_PER_NODE=2
 
 let NRANKS=${NNODES}*${NRANKS_PER_NODE}
 
@@ -83,9 +83,9 @@ export FI_CXI_RDZV_THRESHOLD=2000
 
 export NCCL_ALGO=${ALGO}
 
-export NCCL_SOCKET_IFNAME=${SOCKET}
+#export NCCL_SOCKET_IFNAME=${SOCKET}
 
-export NCCL_DEBUG=INFO
+#export NCCL_DEBUG=INFO
 
 #unset NCCL_COLLNET_ENABLE NCCL_CROSS_NIC NCCL_NET NCCL_NET_GDR_LEVEL
 
@@ -99,17 +99,22 @@ echo "========= CCL VARIABLES =============="
 printenv | grep "CCL"
 echo "========= CCL VARIABLES =============="
 
-RUN_ID=polaris_tensor_parallel_Barrier_TG1_${SOCKET}_AWS1p9p1ENV_PHB_TP${TP_DEGREE}_NO_SP_NCCL_ALGO${ALGO}_NOWARMUPS_LAYERS${N_LAYERS}_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
+#CPU_BIND=verbose,list:0:8:16:24 ## for PPN 4
+#CPU_BIND=verbose,list:0:16 ## for PPN2
+CPU_BIND=verbose,list:0:24 ## for PPN2
+
+
+
+RUN_ID=polaris_tensor_parallel_CB024_Barrier_Sync_NOSOCKET_AWS1p9p1_ENV_PHB_TP${TP_DEGREE}_NO_SP_NCCL_ALGO${ALGO}_NOWARMUPS_LAYERS${N_LAYERS}_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
 LOG_DIR=${WORK_DIR}/run_scripts/outdir/logs 
 
 echo "${RUN_ID}"
 
-
 echo "$(timestamp): Before mpiexec."
 
-mpiexec -n ${NRANKS} -ppn ${NRANKS_PER_NODE} -l --line-buffer --cpu-bind verbose,list:0:8:16:24 \
+mpiexec -n ${NRANKS} -ppn ${NRANKS_PER_NODE} -l --line-buffer --cpu-bind ${CPU_BIND} \
 python ${WORK_DIR}/tensor_parallel_with_gradient_synchronization_debug.py -n_layers ${N_LAYERS} \
--tp_degree=${TP_DEGREE} --barrier --tg1 --iterations=${TIMING_LOOPS} --precision ${PRECISION} \
+-tp_degree=${TP_DEGREE} --barrier --iterations=${TIMING_LOOPS} --precision ${PRECISION} \
 --logging --log_directory=${LOG_DIR} --log_file=${RUN_ID}.log 
 
 echo "$(timestamp): Finished the workload."
