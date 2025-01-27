@@ -1,5 +1,5 @@
 #!/bin/bash -x
-#PBS -l select=2
+#PBS -l select=4
 #PBS -l place=scatter
 #PBS -l walltime=00:10:00
 #PBS -q debug-scaling
