@@ -1,8 +1,8 @@
 #!/bin/bash -x
-#PBS -l select=4
+#PBS -l select=2
 #PBS -l place=scatter
 #PBS -l walltime=00:10:00
-#PBS -q debug-scaling
+#PBS -q debug
 #PBS -A datascience
 #PBS -l filesystems=home:eagle
 #PBS -k doe
@@ -24,19 +24,19 @@ echo "$(timestamp): Start of the Run, after exporting TZ Central"
 WORK_DIR=/home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks
 LOG_WRAPPER=${WORK_DIR}/log_wrapper.sh 
 
-TP_DEGREE=2
+TP_DEGREE=4
 TIMING_LOOPS=4
 #WARMUPS=4
 PRECISION="float32"
 N_LAYERS=1
 TRIAL=1
-#SOCKET=hsn
+SOCKET=hsn
 
 ALGO=Ring
 
 # MPI and OpenMP settings
 NNODES=`wc -l < $PBS_NODEFILE`
-NRANKS_PER_NODE=2
+NRANKS_PER_NODE=4
 
 let NRANKS=${NNODES}*${NRANKS_PER_NODE}
 
@@ -64,7 +64,7 @@ export AWS_DIR=/soft/libraries/aws-ofi-nccl/v1.9.1-aws/
 export NCCL_NET_GDR_LEVEL=PHB
 export NCCL_CROSS_NIC=1
 export NCCL_COLLNET_ENABLE=1
-#export NCCL_SOCKET_IFNAME=hsn
+export NCCL_SOCKET_IFNAME=hsn
 export NCCL_NET="AWS Libfabric"
 export LD_LIBRARY_PATH=$AWS_DIR/lib:$LD_LIBRARY_PATH
 export LD_LIBRARY_PATH=/soft/libraries/hwloc/lib/:$LD_LIBRARY_PATH
@@ -83,7 +83,7 @@ export FI_CXI_RDZV_THRESHOLD=2000
 
 export NCCL_ALGO=${ALGO}
 
-#export NCCL_SOCKET_IFNAME=${SOCKET}
+export NCCL_SOCKET_IFNAME=${SOCKET}
 
 #export NCCL_DEBUG=INFO
 
@@ -99,13 +99,13 @@ echo "========= CCL VARIABLES =============="
 printenv | grep "CCL"
 echo "========= CCL VARIABLES =============="
 
-#CPU_BIND=verbose,list:0:8:16:24 ## for PPN 4
+CPU_BIND=verbose,list:0:8:16:24 ## for PPN 4
 #CPU_BIND=verbose,list:0:16 ## for PPN2
-CPU_BIND=verbose,list:0:24 ## for PPN2
+#CPU_BIND=verbose,list:0:24 ## for PPN2
 
 
 
-RUN_ID=polaris_tensor_parallel_CB024_Barrier_Sync_NOSOCKET_AWS1p9p1_ENV_PHB_TP${TP_DEGREE}_NO_SP_NCCL_ALGO${ALGO}_NOWARMUPS_LAYERS${N_LAYERS}_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
+RUN_ID=polaris_tensor_parallel_All_Ranks_CB081624_Barrier_Sync_Socket_${SOCKET}_AWS1p9p1_ENV_PHB_TP${TP_DEGREE}_NO_SP_NCCL_ALGO${ALGO}_NOWARMUPS_LAYERS${N_LAYERS}_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
 LOG_DIR=${WORK_DIR}/run_scripts/outdir/logs 
 
 echo "${RUN_ID}"
@@ -115,7 +115,7 @@ echo "$(timestamp): Before mpiexec."
 mpiexec -n ${NRANKS} -ppn ${NRANKS_PER_NODE} -l --line-buffer --cpu-bind ${CPU_BIND} \
 python ${WORK_DIR}/tensor_parallel_with_gradient_synchronization_debug.py -n_layers ${N_LAYERS} \
 -tp_degree=${TP_DEGREE} --barrier --iterations=${TIMING_LOOPS} --precision ${PRECISION} \
---logging --log_directory=${LOG_DIR} --log_file=${RUN_ID}.log 
+--logging --log_directory=${LOG_DIR} --log_file=${RUN_ID} 
 
 echo "$(timestamp): Finished the workload."
 
