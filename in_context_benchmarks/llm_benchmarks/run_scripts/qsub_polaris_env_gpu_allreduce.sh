@@ -1,15 +1,15 @@
 #!/bin/bash -x
-#PBS -l select=4
+#PBS -l select=2
 #PBS -l place=scatter
 #PBS -l walltime=00:10:00
-#PBS -q debug-scaling
+#PBS -q debug
 #PBS -A datascience
 #PBS -l filesystems=home:eagle
 #PBS -k doe
 #PBS -e /home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks/run_scripts/errordir
 #PBS -o /home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks/run_scripts/outdir
 #PBS -j oe
-#PBS -N FP32_NOSP 
+#PBS -N ARDC_PT 
 
 ## Timezone US/Central
 export TZ='/usr/share/zoneinfo/US/Central'
@@ -29,15 +29,16 @@ LOG_WRAPPER=${WORK_DIR}/log_wrapper.sh
 #WARMUPS=4
 #PRECISION="float32"
 #N_LAYERS=1
-TRIAL=5
+TRIAL=1
 SOCKET=hsn
-MSG=1073741824 ## ~1.07 GB per Rank, if 4 ranks
+#MSG=1073741824 ## ~1.07 GB per Rank, if 4 ranks
+MSG=536870912 ## ~2.15 GB per rank
 
 ALGO=Ring
 
 # MPI and OpenMP settings
 NNODES=`wc -l < $PBS_NODEFILE`
-NRANKS_PER_NODE=1
+NRANKS_PER_NODE=2
 
 let NRANKS=${NNODES}*${NRANKS_PER_NODE}
 
@@ -100,7 +101,8 @@ echo "========= CCL VARIABLES =============="
 printenv | grep "CCL"
 echo "========= CCL VARIABLES =============="
 
-CPU_BIND=verbose,list:0:24:8:16 ## for PPN 4
+#CPU_BIND=verbose,list:0:24:8:16 ## for PPN 4
+CPU_BIND=verbose,list:0:8 ## for PPN2
 #CPU_BIND=verbose,list:0:16 ## for PPN2
 #CPU_BIND=verbose,list:0:24 ## for PPN2
 #CPU_BIND=verbose,list:0 ## for PPN1
@@ -108,7 +110,7 @@ CPU_BIND=verbose,list:0:24:8:16 ## for PPN 4
 
 
 
-RUN_ID=polaris_ALLREDUCE_CB024816_Socket_${SOCKET}_AWS1p9p1_ENV_PHB_NCCL_ALGO${ALGO}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
+RUN_ID=polaris_ALLREDUCE_2GB_CB08_Socket_${SOCKET}_AWS1p9p1_ENV_PHB_NCCL_ALGO${ALGO}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
 #LOG_DIR=${WORK_DIR}/run_scripts/outdir/logs 
 
 echo "${RUN_ID}"

@@ -12,7 +12,7 @@ parser = argparse.ArgumentParser(description="parse input arguments for the gpu 
 
 parser.add_argument("-dim", "--tensor_dimension_1d",
                         help="The size of the 1d tensor that is distributed accross the ranks per node.",
-                        type=int, default=1073741824) ## ~1.07 GB per rank, consider Poalris with 4 GPUs
+                        type=int, default=536870912) ## ~2.15 GB per rank, consider Poalris with 4 GPUs
 args = parser.parse_args()
 
 logging.basicConfig(level="INFO")
@@ -72,7 +72,9 @@ def main(tensor_dimension_1d):
     torch.cuda.set_device(device)
 
     #dim_size=int(int(sys.argv[1])/4)
-    dim_size=int(int(tensor_dimension_1d)/4)
+    #dim_size=int(int(tensor_dimension_1d)/4)
+    dim_size=int(int(tensor_dimension_1d))
+
     MPI.COMM_WORLD.Barrier()
 
     elapsed1=[]
@@ -96,9 +98,9 @@ def main(tensor_dimension_1d):
         logging.info(f"Total time = {total_elapsed / 1000 / 1000 / 1000} s")
         for idx, e in enumerate(elapsed1):
             if idx==0:
-                logging.info(f"ALLREDUCE {idx} took {e / 1000 / 1000 / 1000} s")
+                logging.info(f"ALLREDUCE {idx} took {e / 1000 / 1000 / 1000} s, Throughput = {((dim_size * 4) / e) * 1000} MB/s")
             else:
-                logging.info(f"ALLREDUCE {idx} took {e / 1000 / 1000} ms")
+                logging.info(f"ALLREDUCE {idx} took {e / 1000 / 1000} ms, Throughput = {((dim_size * 4) / e) * 1000} MB/s")
 
 if __name__ == "__main__":    
     main(args.tensor_dimension_1d)
