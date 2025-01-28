@@ -99,13 +99,14 @@ echo "========= CCL VARIABLES =============="
 printenv | grep "CCL"
 echo "========= CCL VARIABLES =============="
 
-CPU_BIND=verbose,list:0:8:16:24 ## for PPN 4
+#CPU_BIND=verbose,list:0:8:16:24 ## for PPN 4
 #CPU_BIND=verbose,list:0:16 ## for PPN2
-#CPU_BIND=verbose,list:0:24 ## for PPN2
+CPU_BIND=verbose,list:0:24 ## for PPN2
+#CPU_BIND=verbose,list:0 ## for PPN1
 
 
 
-RUN_ID=polaris_tensor_parallel_All_Ranks_CB081624_Barrier_Sync_Socket_${SOCKET}_AWS1p9p1_ENV_PHB_TP${TP_DEGREE}_NO_SP_NCCL_ALGO${ALGO}_NOWARMUPS_LAYERS${N_LAYERS}_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
+RUN_ID=polaris_tensor_parallel_All_Ranks_CB024_Barrier_Sync_Socket_${SOCKET}_AWS1p9p1_ENV_PHB_TP${TP_DEGREE}_NO_SP_NCCL_ALGO${ALGO}_NOWARMUPS_LAYERS${N_LAYERS}_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
 LOG_DIR=${WORK_DIR}/run_scripts/outdir/logs 
 
 echo "${RUN_ID}"
