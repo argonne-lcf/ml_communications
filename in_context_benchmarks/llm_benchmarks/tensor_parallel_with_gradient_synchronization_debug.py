@@ -447,7 +447,7 @@ torch.distributed.init_process_group(
 )
 
 TP = args.tensor_parallel_degree
-assert TP % 2 == 0
+#assert TP % 2 == 0
 
 def get_tp_group(TP, world_size):
     tp_group=None
@@ -673,7 +673,8 @@ logging.info(f"Parameters (per rank) = {number_of_total_parameters / 1e9} Billio
 logging.info(f"N_iter_grad_sync = {n_iter_grad_sync}")
 logging.info(f"Allgather buffer size = {(args.sequence_length * args.hidden_dimension * data_type_multiplier) / 8 / 1e6} MB")
 logging.info(f"Grad Sync Allreduce bucket size = {(highest_bucket_size * data_type_multiplier) / 8 / 1e6} MB") 
-logging.info(f"DP Allreduce Throughput = {(((highest_bucket_size * data_type_multiplier) / 8) / (T_grad_sync_individual[0,0])) * 1e3} MB/s")
+logging.info(f"Maximum DP Allreduce Throughput = {((((highest_bucket_size * data_type_multiplier) / 8) / (np.min(T_grad_sync_individual))) * 1e3) / 1.0} MB/s")
+logging.info(f"Minimum DP Allreduce Throughput = {((((highest_bucket_size * data_type_multiplier) / 8) / (np.max(T_grad_sync_individual))) * 1e3) / 1.0} MB/s")
 if SP:
     logging.info(f"SP Allgather data volume per layer per iteration = {(sp_allgather_data_volume ) / 8 / 1e6} MB")
     logging.info(f"SP Allgather 1 Max. Throughput = {((sp_allgather_data_volume / 8) / np.min(T_dict_individual['T_allgather_1'])) *  1e3} MB/s")
