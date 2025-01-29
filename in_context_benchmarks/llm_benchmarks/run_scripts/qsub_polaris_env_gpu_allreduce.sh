@@ -38,7 +38,7 @@ ALGO=Ring
 
 # MPI and OpenMP settings
 NNODES=`wc -l < $PBS_NODEFILE`
-NRANKS_PER_NODE=2
+NRANKS_PER_NODE=4
 
 let NRANKS=${NNODES}*${NRANKS_PER_NODE}
 
@@ -101,8 +101,10 @@ echo "========= CCL VARIABLES =============="
 printenv | grep "CCL"
 echo "========= CCL VARIABLES =============="
 
-#CPU_BIND=verbose,list:0:24:8:16 ## for PPN 4
-CPU_BIND=verbose,list:0:8 ## for PPN2
+CPU_BIND=verbose,list:0:24:8:16 ## for PPN 4
+#CPU_BIND=verbose,list:0:8:16:24 ## for PPN 4
+#CPU_BIND=verbose,list:0:8:16 ## for PPN 3
+#CPU_BIND=verbose,list:0:8 ## for PPN2
 #CPU_BIND=verbose,list:0:16 ## for PPN2
 #CPU_BIND=verbose,list:0:24 ## for PPN2
 #CPU_BIND=verbose,list:0 ## for PPN1
@@ -110,7 +112,7 @@ CPU_BIND=verbose,list:0:8 ## for PPN2
 
 
 
-RUN_ID=polaris_ALLREDUCE_2GB_CB08_Socket_${SOCKET}_AWS1p9p1_ENV_PHB_NCCL_ALGO${ALGO}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
+RUN_ID=polaris_ALLREDUCE_2GB_CB024816_Socket_${SOCKET}_AWS1p9p1_ENV_PHB_NCCL_ALGO${ALGO}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
 #LOG_DIR=${WORK_DIR}/run_scripts/outdir/logs 
 
 echo "${RUN_ID}"
