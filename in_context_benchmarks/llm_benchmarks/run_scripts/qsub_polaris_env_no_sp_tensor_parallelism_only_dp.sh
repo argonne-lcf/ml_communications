@@ -36,7 +36,7 @@ ALGO=Ring
 
 # MPI and OpenMP settings
 NNODES=`wc -l < $PBS_NODEFILE`
-NRANKS_PER_NODE=1
+NRANKS_PER_NODE=4
 
 let NRANKS=${NNODES}*${NRANKS_PER_NODE}
 
@@ -72,7 +72,7 @@ export LD_LIBRARY_PATH=/soft/libraries/hwloc/lib/:$LD_LIBRARY_PATH
 export FI_CXI_DISABLE_HOST_REGISTER=1
 export FI_MR_CACHE_MONITOR=userfaultfd
 export FI_CXI_DEFAULT_CQ_SIZE=131072
-#export FI_CXI_DEFAULT_TX_SIZE=131072
+export FI_CXI_DEFAULT_TX_SIZE=131072
 export FI_CXI_RDZV_PROTO=alt_read
 export FI_CXI_RX_MATCH_MODE=software
 export FI_CXI_REQ_BUF_SIZE=16MB
@@ -99,14 +99,15 @@ echo "========= CCL VARIABLES =============="
 printenv | grep "CCL"
 echo "========= CCL VARIABLES =============="
 
+CPU_BIND=verbose,list:0-7:8-15:16-23:24-31
 #CPU_BIND=verbose,list:0:8:16:24 ## for PPN 4
 #CPU_BIND=verbose,list:0:16 ## for PPN2
 #CPU_BIND=verbose,list:0:24 ## for PPN2
-CPU_BIND=verbose,list:0 ## for PPN1
+#CPU_BIND=verbose,list:0 ## for PPN1
 
 
 
-RUN_ID=polaris_tensor_parallel_DP_ONLY_NO_TX_All_Ranks_CB0_Barrier_Sync_Socket_${SOCKET}_AWS1p9p1_ENV_PHB_TP${TP_DEGREE}_NO_SP_NCCL_ALGO${ALGO}_NOWARMUPS_LAYERS${N_LAYERS}_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
+RUN_ID=polaris_tensor_parallel_DP_ONLY_All_Ranks_CB0-7_Barrier_Sync_Socket_${SOCKET}_AWS1p9p1_ENV_PHB_TP${TP_DEGREE}_NO_SP_NCCL_ALGO${ALGO}_NOWARMUPS_LAYERS${N_LAYERS}_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
 LOG_DIR=${WORK_DIR}/run_scripts/outdir/logs 
 
 echo "${RUN_ID}"

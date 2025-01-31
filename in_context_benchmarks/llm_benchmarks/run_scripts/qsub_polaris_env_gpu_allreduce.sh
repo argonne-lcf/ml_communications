@@ -38,7 +38,7 @@ ALGO=Ring
 
 # MPI and OpenMP settings
 NNODES=`wc -l < $PBS_NODEFILE`
-NRANKS_PER_NODE=4
+NRANKS_PER_NODE=5
 
 let NRANKS=${NNODES}*${NRANKS_PER_NODE}
 
@@ -101,18 +101,23 @@ echo "========= CCL VARIABLES =============="
 printenv | grep "CCL"
 echo "========= CCL VARIABLES =============="
 
-CPU_BIND=verbose,list:0:24:8:16 ## for PPN 4
-#CPU_BIND=verbose,list:0:8:16:24 ## for PPN 4
-#CPU_BIND=verbose,list:0:8:16 ## for PPN 3
-#CPU_BIND=verbose,list:0:8 ## for PPN2
-#CPU_BIND=verbose,list:0:16 ## for PPN2
-#CPU_BIND=verbose,list:0:24 ## for PPN2
-#CPU_BIND=verbose,list:0 ## for PPN1
+#CPU_BIND=verbose,list:0-7:8-15:16-23 ## Trying for PPN 3
+#CPU_BIND=verbose,list:0,1:8,9:16,17:24,25 ## Gives the best throughput for PPN 4
+#CPU_BIND=verbose,list:0-7:8-15:16-23:24-31 ## Gives the best throughput for PPN 4
+#CPU_BIND=verbose,list:0:24:8:16 ## for PPN 4 ## Performs really bad
+#CPU_BIND=verbose,list:0:8:16:24 ## for PPN 4 ## Performs really bad
+#CPU_BIND=verbose,list:0:8:16 ## for PPN 3 ## Performs really bad
+#CPU_BIND=verbose,list:0:8 ## for PPN2 ## Performs really bad
+#CPU_BIND=verbose,list:0:16 ## for PPN2 ## Performs really bad
+#CPU_BIND=verbose,list:0:24 ## for PPN2 ## Performs really bad
+#CPU_BIND=verbose,list:0,1 ## for PPN1 
+#CPU_BIND=verbose,list:0,1:8,9 ## for PPN2
+#CPU_BIND=verbose,list:0,1:8,9:16,17 ## for PPN3
+CPU_BIND=verbose,list:0,1:8,9:16,17:24,25:32,33
 
 
 
-
-RUN_ID=polaris_ALLREDUCE_2GB_CB024816_Socket_${SOCKET}_AWS1p9p1_ENV_PHB_NCCL_ALGO${ALGO}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
+RUN_ID=polaris_ALLREDUCE_CB_0189161724253233_2GB_Socket_${SOCKET}_AWS1p9p1_ENV_PHB_NCCL_ALGO${ALGO}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
 #LOG_DIR=${WORK_DIR}/run_scripts/outdir/logs 
 
 echo "${RUN_ID}"

@@ -1,5 +1,5 @@
 #!/bin/bash -x
-#PBS -l select=4
+#PBS -l select=2
 #PBS -l place=scatter
 #PBS -l walltime=00:30:00
 #PBS -q debug-scaling
@@ -30,7 +30,7 @@ TIMING_LOOPS=4
 PRECISION="float32"
 N_LAYERS=1
 TRIAL=1
-#SOCKET=hsn0,hsn1
+SOCKET=hsn
 
 ALGO=Ring
 
@@ -62,7 +62,7 @@ export AWS_DIR=/soft/libraries/aws-ofi-nccl/v1.9.1-aws/
 export NCCL_NET_GDR_LEVEL=PHB
 export NCCL_CROSS_NIC=1
 export NCCL_COLLNET_ENABLE=1
-#export NCCL_SOCKET_IFNAME=hsn
+export NCCL_SOCKET_IFNAME=hsn
 export NCCL_NET="AWS Libfabric"
 export LD_LIBRARY_PATH=$AWS_DIR/lib:$LD_LIBRARY_PATH
 export LD_LIBRARY_PATH=/soft/libraries/hwloc/lib/:$LD_LIBRARY_PATH
@@ -81,12 +81,12 @@ export FI_CXI_RDZV_THRESHOLD=2000
 
 export NCCL_ALGO=${ALGO}
 
-#export NCCL_SOCKET_IFNAME=${SOCKET}
+export NCCL_SOCKET_IFNAME=${SOCKET}
 
 #unset NCCL_COLLNET_ENABLE NCCL_CROSS_NIC NCCL_NET NCCL_NET_GDR_LEVEL
 
 #CPU_BIND=verbose,list:24,16,8,0
-CPU_BIND=verbose,list:0:8:16:24
+CPU_BIND=verbose,list:0-7:8-15:16-23:24-31
 
 
 echo "========= ENVIRONMENT VARIABLES ======="
@@ -99,7 +99,7 @@ echo "========= CCL VARIABLES =============="
 printenv | grep "CCL"
 echo "========= CCL VARIABLES =============="
 
-RUN_ID=polaris_profile_tensor_parallel_Barrier_Sync_NOSOCKET_AWS1p9p1_ENV_PHB_TP${TP_DEGREE}_NO_SP_NCCL_ALGO${ALGO}_NOWARMUPS_LAYERS${N_LAYERS}_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
+RUN_ID=polaris_profile_tensor_parallel_CB0-7_Barrier_Sync_SOCKET_${SOCKET}_AWS1p9p1_ENV_PHB_TP${TP_DEGREE}_NO_SP_NCCL_ALGO${ALGO}_NOWARMUPS_LAYERS${N_LAYERS}_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
 LOG_DIR=${WORK_DIR}/run_scripts/outdir/logs 
 
 echo "${RUN_ID}"
