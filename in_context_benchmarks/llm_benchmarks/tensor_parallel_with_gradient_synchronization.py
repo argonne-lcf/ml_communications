@@ -41,6 +41,12 @@ parser.add_argument("-sp_switch", "--sequence_parallel_switch", help="Switch seq
 
 parser.add_argument("-n_layers", "--number_of_transformer_layers", help="Number of transformer layers", type=int, default=80)
 
+parser.add_argument("--init_std", help="Standard deviation for initializing weights and inputs with normal distribution",
+                    type=float, default=0.01)
+
+parser.add_argument("--init_mean", help="Mean for initializing weights and inputs with normal distribution",
+                    type=float, default=0.0)
+
 parser.add_argument("-p", "--precision", help="Data type for the elements of a tensor. float32 and bfloat16 supported.",
                     type=str, default="float32")
 
@@ -442,8 +448,8 @@ M = 1
 all_gather_buffer = torch.zeros([S, M, H], dtype=data_type, device=get_device_string(args.device))
 SP=args.sequence_parallel_switch
 
-partial_input = torch.ones([S//TP, M, H], dtype=data_type, device=get_device_string(args.device))
-input = torch.ones([S, M, H], dtype=data_type, device=get_device_string(args.device))
+partial_input = torch.normal(mean=args.init_mean, std=torch.ones([S//TP, M, H], dtype=data_type, device=get_device_string(args.device))*args.init_std)
+input = torch.normal(mean=args.init_mean, std=torch.ones([S, M, H], dtype=data_type, device=get_device_string(args.device))*args.init_std)
 partial_interim2 = torch.zeros([S//TP, M, H], dtype=data_type, device=get_device_string(args.device))
 partial_interim4 = torch.zeros([S//TP, M, H], dtype=data_type, device=get_device_string(args.device))
 
@@ -457,32 +463,32 @@ else:
     input = torch.ones([S, M, H], dtype=data_type, device=get_device_string(args.device))
 """
 #logging.info(f"Input shape = {input.shape}")
-attn_W_QKV = torch.ones(
+attn_W_QKV = torch.normal(mean=args.init_mean, std=torch.ones(
         H//TP,
         H,
         device=get_device_string(args.device),
         dtype=data_type,
-    )*1e-4
+    )*args.init_std)
 
-attn_WO = torch.ones(
+attn_WO = torch.normal(mean=args.init_mean, std=torch.ones(
         H,
         H//TP,
         device=get_device_string(args.device),
         dtype=data_type,
-    )*1e-3
+    )*args.init_std)
 
-mat_h_4h = torch.ones(
+mat_h_4h = torch.normal(mean=args.init_mean, std=torch.ones(
         4*H//TP,
         H,
         device=get_device_string(args.device),
         dtype=data_type,
-    )*1e-4
-mat_4h_h = torch.ones(
+    )*args.init_std)
+mat_4h_h = torch.normal(mean=args.init_mean, std=torch.ones(
         H,
         4*H//TP,
         device=get_device_string(args.device),
         dtype=data_type,
-    )*1e-3
+    )*args.init_std)
 
 n_layers = args.number_of_transformer_layers
 number_of_total_parameters = ((attn_W_QKV.shape[0]*attn_W_QKV.shape[1] + attn_WO.shape[0]*attn_WO.shape[1] +  mat_h_4h.shape[0]*mat_h_4h.shape[1] +  mat_4h_h.shape[0]*mat_4h_h.shape[1]) * n_layers)
@@ -493,7 +499,7 @@ number_of_total_parameters = ((attn_W_QKV.shape[0]*attn_W_QKV.shape[1] + attn_WO
 highest_bucket_size = int(args.grad_allreduce_bucket)
 n_iter_grad_sync = math.ceil(number_of_total_parameters / highest_bucket_size)
 
-allreduce_grad = torch.ones([highest_bucket_size], dtype=data_type, device=get_device_string(args.device))
+allreduce_grad = torch.normal(mean=0.0, std=torch.ones([highest_bucket_size], dtype=data_type, device=get_device_string(args.device))*0.01)
 
 if rank==0:
     logging.info("start loop")
