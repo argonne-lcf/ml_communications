@@ -355,7 +355,6 @@ def matmul_flops(input_shape, other_shape):
     """
     assert len(input_shape) > 1 #Not implemented
     assert len(other_shape) == 2 #Not implemented
-    print("shapes: ", input_shape, other_shape)
     #Reference: https://math.stackexchange.com/questions/3512976/proof-of-of-flops-in-matrix-multiplication
     return np.prod(input_shape[:-1]) * other_shape[-1] * (2*other_shape[-2]-1)
 
@@ -670,17 +669,21 @@ if rank == 0:
     logging.info(f"Grad Sync Total times from timing loop = {T_dict_total['T_grad_sync']} ms")
     logging.info(f"Timing loop times = {T_dict_total['T_timing_loop']}")
     logging.info(f"==== Finished Running ====")
-    if args.save:
-        result_dict = {"T_dict_individual" : result.T_dict_individual,
-                       "T_dict_total": result.T_dict_total,
-                       "T_grad_sync_individual" : result.T_grad_sync_individual,
-                       "interim2" : result.interim2.cpu(),
-                       "interim4" : result.interim4.cpu(),
-                       "allreduce_grad" : result.allreduce_grad.cpu()}
-        result_dir = os.path.join(args.log_directory, "results") 
-        print(result_dir)
-        if not os.path.exists(result_dir):
-            os.makedirs(result_dir)
-        #np.save(os.path.join(result_dir, args.log_file), dict(result._asdict())) ## directly converts a namedtuple to a dictionary, doesn't play well with GPU tensors.
-        np.save(os.path.join(result_dir, args.log_file), result_dict)
+
+if args.save:
+    timing_dict = {"T_dict_individual" : result.T_dict_individual,
+                    "T_dict_total": result.T_dict_total,
+                    "T_grad_sync_individual" : result.T_grad_sync_individual}
+    #np.save(os.path.join(result_dir, args.log_file), dict(result._asdict())) ## directly converts a namedtuple to a dictionary, doesn't play well with GPU tensors.
+
+    result_dir = os.path.join(args.log_directory, "timings")
+    result_dir = os.path.join(result_dir, args.log_file)
+    print("saving to:", result_dir)
+    if not os.path.exists(result_dir):
+        os.makedirs(result_dir)
+
+    np.save(os.path.join(result_dir, f"rank_{rank}"), timing_dict)
     
+
+torch.distributed.barrier()
+exit()
