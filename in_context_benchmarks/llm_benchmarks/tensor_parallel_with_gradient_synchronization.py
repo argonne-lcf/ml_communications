@@ -456,6 +456,8 @@ H = args.hidden_dimension #9216 #9216 hidden dimension
 M = 1
 all_gather_buffer = torch.zeros([S, M, H], dtype=data_type, device=get_device_string(args.device))
 SP=args.sequence_parallel_switch
+if SP:
+    assert S % TP == 0, "sequence must be dividable by TP degree with sequence parallelism enabled"
 
 partial_input = torch.normal(mean=args.init_mean, std=torch.ones([S//TP, M, H], dtype=data_type, device=get_device_string(args.device))*args.init_std)
 input = torch.normal(mean=args.init_mean, std=torch.ones([S, M, H], dtype=data_type, device=get_device_string(args.device))*args.init_std)
