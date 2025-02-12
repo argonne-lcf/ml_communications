@@ -1,15 +1,15 @@
 #!/bin/bash -x
-#PBS -l select=2
+#PBS -l select=16
 #PBS -l place=scatter
 #PBS -l walltime=00:10:00
-#PBS -q debug-scaling
+#PBS -q prod
 #PBS -A datascience
 #PBS -l filesystems=home:eagle
 #PBS -k doe
 #PBS -e /home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks/run_scripts/errordir
 #PBS -o /home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks/run_scripts/outdir
 #PBS -j oe
-#PBS -N TP2 
+#PBS -N TP2_CVD_R2
 
 ## Timezone US/Central
 export TZ='/usr/share/zoneinfo/US/Central'
@@ -81,6 +81,10 @@ export FI_CXI_RDZV_GET_MIN=0
 export FI_CXI_SAFE_DEVMEM_COPY_THRESHOLD=16000
 export FI_CXI_RDZV_THRESHOLD=2000
 
+# Choose 2 GPUs from different socket, 0,2 1,2 etc. for NIC imbalance testing
+# Use only for PPN 2
+export CUDA_VISIBLE_DEVICES=0,2
+
 export NCCL_ALGO=${ALGO}
 
 export NCCL_SOCKET_IFNAME=${SOCKET}
@@ -99,7 +103,9 @@ echo "========= CCL VARIABLES =============="
 printenv | grep "CCL"
 echo "========= CCL VARIABLES =============="
 
-CPU_BIND=verbose,list:0-7:8-15:16-23:24-31
+#CPU_BIND=verbose,list:0-7:8-15:16-23:24-31
+CPU_BIND=verbose,list:0-7:16-23 ## PPN 2, CVD 0,2 # optimal
+#CPU_BIND=verbose,list:0-7:8-15 ## PPN 2,
 #CPU_BIND=verbose,list:0:8:16:24 ## for PPN 4
 #CPU_BIND=verbose,list:0:16 ## for PPN2
 #CPU_BIND=verbose,list:0:24 ## for PPN2
@@ -107,7 +113,7 @@ CPU_BIND=verbose,list:0-7:8-15:16-23:24-31
 
 
 
-RUN_ID=polaris_tensor_parallel_All_Ranks_CB0-7_Barrier_Sync_Socket_${SOCKET}_AWS1p9p1_ENV_PHB_TP${TP_DEGREE}_NO_SP_NCCL_ALGO${ALGO}_NOWARMUPS_LAYERS${N_LAYERS}_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
+RUN_ID=polaris_tensor_parallel_NIC_CVD02_CB016_Socket_${SOCKET}_AWS1p9p1_ENV_PHB_TP${TP_DEGREE}_NO_SP_NCCL_ALGO${ALGO}_NOWARMUPS_LAYERS${N_LAYERS}_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
 LOG_DIR=${WORK_DIR}/run_scripts/outdir/logs 
 
 echo "${RUN_ID}"
