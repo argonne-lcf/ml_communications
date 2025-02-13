@@ -28,7 +28,7 @@ LOG_WRAPPER=${WORK_DIR}/log_wrapper.sh
 TP_DEGREE=12
 WARMUP_ITERS=1
 NUM_ITERS=5  # Switch back to N_TIMING_LOOP?
-PRECISION="float16"
+PRECISION="float32"
 N_LAYERS=80
 # TRIAL=2
 
@@ -77,7 +77,10 @@ PYTHON_ARGS="\
   --log_directory=${WORK_DIR}/run_scripts/outdir_aurora/logs \
   --log_file=${RUN_ID}.log
 "
-  # python ${WORK_DIR}/tensor_parallel_with_gradient_synchronization.py \
+# mpiexec $MPI_ARGS \
+#   python ${WORK_DIR}/tensor_parallel_with_gradient_synchronization.py \
+#   $PYTHON_ARGS
+
 mpiexec $MPI_ARGS \
   python ${WORK_DIR}/unified_parallelism.py \
   $PYTHON_ARGS

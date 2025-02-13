@@ -9,13 +9,14 @@ from collections import namedtuple
 
 import torch
 import numpy as np
+import torch.distributed
 from torch.profiler import profile, record_function, ProfilerActivity
+import torch.distributed as dist
 
 #import intel_extension_for_pytorch as ipex  # noqa: F401 # type: ignore
 #import oneccl_bindings_for_pytorch  # noqa: F401 # type: ignore
 
 parser = argparse.ArgumentParser(description="parse input arguments for tensor and data  parallel partial benchmark")
-
 parser.add_argument("-s", "--sequence_length",
                     help="Maximum sequence length. The size of the ALLGATHER buffer",
                     type=int, default=4608)
@@ -25,40 +26,37 @@ parser.add_argument("-d", "--hidden_dimension",
 parser.add_argument("-it", "--iterations",
                     help="number of iterations for the timing loop",
                     type=int, default=3)
-parser.add_argument("-wit", "--warmup_iterations", help="number of warmup iterations",
+parser.add_argument("-wit", "--warmup_iterations", 
+                    help="number of warmup iterations",
                     type=int, default=2)
-
-parser.add_argument("-bucket", "--grad_allreduce_bucket", help="The largest bucket of message passed to do the allreduce over the data parallel groups (in number of elements in a message).",
+parser.add_argument("-bucket", "--grad_allreduce_bucket", 
+                    help="The largest bucket of message passed to do the allreduce over the data parallel groups (in number of elements in a message).",
                     type=int, default=5e8)
-
-parser.add_argument("-dp_switch", "--data_parallel_switch", help="If TRUE, calculates data parallelism degree based of tp_degree",
+parser.add_argument("-dp_switch", "--data_parallel_switch", 
+                    help="If TRUE, calculates data parallelism degree based of tp_degree",
                     type=bool, default=True)
-
-parser.add_argument("-tp_degree", "--tensor_parallel_degree", help="Tensor Parallel degree. In this context, the model is distributed across the number of (tensor parallel degree)) ranks",
+parser.add_argument("-tp_degree", "--tensor_parallel_degree", 
+                    help="Tensor Parallel degree. In this context, the model is distributed across the number of (tensor parallel degree)) ranks",
                     type=int, default=None)
-
-parser.add_argument("-sp_switch", "--sequence_parallel_switch", help="Switch sequence parallelism on or off", action='store_true')
-
-parser.add_argument("-n_layers", "--number_of_transformer_layers", help="Number of transformer layers", type=int, default=80)
-
-parser.add_argument("--init_std", help="Standard deviation for initializing weights and inputs with normal distribution",
+parser.add_argument("-sp_switch", "--sequence_parallel_switch", 
+                    help="Switch sequence parallelism on or off", action='store_true')
+parser.add_argument("-n_layers", "--number_of_transformer_layers", 
+                    help="Number of transformer layers", type=int, default=80)
+parser.add_argument("--init_std", 
+                    help="Standard deviation for initializing weights and inputs with normal distribution",
                     type=float, default=0.01)
-
-parser.add_argument("--init_mean", help="Mean for initializing weights and inputs with normal distribution",
+parser.add_argument("--init_mean", 
+                    help="Mean for initializing weights and inputs with normal distribution",
                     type=float, default=0.0)
-
-parser.add_argument("-p", "--precision", help="Data type for the elements of a tensor. float32 and bfloat16 supported.",
+parser.add_argument("-p", "--precision", 
+                    help="Data type for the elements of a tensor. float32 and bfloat16 supported.",
                     type=str, default="float32")
-
 parser.add_argument("-dvc", "--device", help="Device type. cuda and xpu supported.",
                     type=str, default="cuda")
-
 parser.add_argument("-f", "--log_file", help="Output file name",
                     type=str, default="tensor_parallel.log")
-
 parser.add_argument("-dir", "--log_directory", help="Output file path",
                     type=str, default="logs/")
-
 parser.add_argument("--logging", help="Switch logging on", action='store_true')
 parser.add_argument("--save", help="Save detail results in npy format", action='store_true') ## Generates huge files, use with caution
 parser.add_argument("--trace", default=None, type=str)
@@ -75,238 +73,118 @@ def trace_func(func):
          return func(*args, **kwargs)
    return wrapper
 
-warmup=args.warmup_iterations
-log_directory = args.log_directory  # Directory for logs
-log_filename = args.log_file  # Log file name
-log_filepath = os.path.join(log_directory, log_filename)
-
-if args.device == "xpu":
-    import intel_extension_for_pytorch as ipex
-    import oneccl_bindings_for_pytorch
-
-if args.precision == "float32":
-    data_type = torch.float32
-    data_type_multiplier = 32 ## 32 Bits = 4 Bytes
-elif args.precision == "bfloat16":
-    data_type = torch.bfloat16
-    data_type_multiplier = 16 ## 16 Bits
-
 @trace_func
 def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync, 
                     input, partial_input, partial_interim2, 
                     partial_interim4, attn_W_QKV, attn_WO, 
                     mat_h_4h, mat_4h_h, allreduce_grad, warmup=False):
-    # Define how many variables you want
-    operations = ["allgather_1", "QKV", "WO", "reduce_scatter_1",
-                  "allreduce_1", "allgather_2", "H_4H", "4H_H", "reduce_scatter_2", 
-                  "allreduce_2", "grad_sync", "timing_loop"]
-
-    # Initialize the variables using a dictionary
-    T_dict_individual = {f'T_{operation}': np.zeros((N_timing_loop, n_layers)) for operation in operations[:-2]}
+    # Define operations based on parallelisms
+    operations = ["QKV", "WO", "H_4H", "4H_H", "grad_sync", "timing_loop"]
+    if SP:
+        operations += ["allgather_1", "allgather_2", "reduce_scatter_1", "reduce_scatter_2"]
+    else:
+        operations += ["allreduce_1", "allreduce_2"]
+    # Initialize the dictionary to log time
+    T_dict_individual = {
+        f'T_{operation}': np.zeros((N_timing_loop, n_layers)) 
+        for operation in operations
+        if operations not in ["grad_sync", "timing_loop"]  # exclude non-layer-wise op
+    }
     T_dict_total = {f'T_{operation}': np.zeros(N_timing_loop) for operation in operations}
     T_grad_sync_individual = np.zeros((N_timing_loop, n_iter_grad_sync))
-
-    TensorParallelResults = namedtuple("TensorParallelResults",
-                                       ["T_dict_individual", "T_dict_total",
-                                        "T_grad_sync_individual", "interim1", "interim2", "interim3", "interim4",
-                                        "allreduce_grad"])
- 
-    #N_timing_loop = args.number_of_timing_loops 
-    for m in range(N_timing_loop):
-        timing_loop_start_time=time.perf_counter_ns()
-        t_ag_1 = 0.0 # dummy variable for timing the first allgather 
-        t_qkv = 0.0 # dummy variable for timing the QKV matrix multiplication
-        t_WO = 0.0 # dummy variable for timing the WO matrix multiplication
-        t_rs_1 = 0.0 # dummy variable for timing the first reduce scatter
-        t_ardc_1 = 0.0 # dummy variable for timing the first allreduce 
-        t_ag_2 = 0.0 # dummy variable for timing the second allgather
-        t_h_4h = 0.0 # dummy variable for timing the H --> 4H matrix multiplication
-        t_4h_h = 0.0 # dummy variable for timing the 4H --> H matrix multiplication
-        t_rs_2 = 0.0 # dummy variable for timing the second reduce scatter
-        t_ardc_2 = 0.0 # dummy variable for timing the second allreduce
-        t_grad = 0.0 # dummy variable for timing the gradient sync. allreduce
+    TensorParallelResults = namedtuple(
+        "TensorParallelResults",
+        ["T_dict_individual", "T_dict_total", "T_grad_sync_individual", 
+         "interim1", "interim2", "interim3", "interim4", "allreduce_grad"]
+    )
+    for i in range(N_timing_loop):
+        timing_loop_start_time=sync_and_time(args.device)
         timing_loop_time = 0.0
-        for i in range(n_layers):
-            start = time.perf_counter_ns()
+        for l in range(n_layers):
+            ## Attention Block
             if SP:
-                torch.distributed.all_gather_into_tensor(
-                    input, partial_input, group=tp_group
-                )
-                synchronize(args.device)
-                end = time.perf_counter_ns()
-                if warmup:
-                    #if rank == 0:
-                        #logging.info("Doing Warmups")
-                    T_dict_individual["T_allgather_1"][m][i] = 0.0
-                    t_ag_1 = 0.0
-                else:
-                    T_dict_individual["T_allgather_1"][m][i] = (end-start)
-                    t_ag_1 += end - start
-            start = time.perf_counter_ns()
-            #if rank == 0:
-            #logging.info(f"Input Shape = {input.shape}")
-            interim1 = torch.matmul(input, attn_W_QKV.t())
-            #if rank == 0:
-            #logging.info(f"Interim 1 Shape = {interim1.shape}")
-            synchronize(args.device)
-            end = time.perf_counter_ns()
-            if warmup:
-                T_dict_individual["T_QKV"][m][i] = 0.0
-                t_qkv = 0.0
-            else:
-                T_dict_individual["T_QKV"][m][i] = (end - start)
-                t_qkv += end-start
-            start = end
-            interim2 = torch.matmul(interim1, attn_WO.t())
-            #if rank == 0:
-            #logging.info(f"Interim 2 Shape = {interim2.shape}")
-            synchronize(args.device)
-            end = time.perf_counter_ns()
-            if warmup:
-                T_dict_individual["T_WO"][m][i] = 0.0
-                t_WO = 0.0 
-            else:
-                T_dict_individual["T_WO"][m][i] = (end - start)
-                t_WO += end-start
-            start = time.perf_counter_ns()
+                _, T_allgather_1 = timed(lambda: dist.all_gather_into_tensor(input, partial_input, group=tp_group))
+            interim1, T_QKV = timed(lambda: torch.matmul(input, attn_W_QKV.t())) # W_qkv: [s, b, h] -> [s, b, 3h]
+            # TODO: FA
+            interim2, T_WO = timed(lambda: torch.matmul(interim1, attn_WO.t())) # W_out: [s, b, h] -> [s, b, h]
             if SP:
-                torch.distributed.reduce_scatter_tensor(
-                partial_interim2, interim2, group=tp_group
-                )
-                synchronize(args.device)
-                end = time.perf_counter_ns()
-                if warmup:
-                    T_dict_individual["T_reduce_scatter_1"][m][i] = 0.0
-                    t_rs_1 = 0.0
-                else:
-                    T_dict_individual["T_reduce_scatter_1"][m][i] = (end - start)
-                    t_rs_1 += end-start
+                _, T_reduce_scatter_1 = timed(lambda: dist.reduce_scatter_tensor(partial_interim2, interim2, group=tp_group))
             else:
-                start = time.perf_counter_ns()
-                #logging.info("Doing ALLREDUCE now")
-                torch.distributed.all_reduce(
-                    interim2, group=tp_group
-                )
-                synchronize(args.device)
-                end = time.perf_counter_ns()
-                #if rank == 0:
-                #    logging.info(f"Iter {m}, layer {i}, allreduce buffer = {interim2.shape}")
-                if warmup:
-                    T_dict_individual["T_allreduce_1"][m][i] = 0.0
-                    t_ardc_1 = 0.0
-                else:
-                    T_dict_individual["T_allreduce_1"][m][i] = (end - start)
-                    t_ardc_1 += end-start
+                _, T_allreduce_1 = timed(lambda: dist.all_reduce(interim2, group=tp_group))
+            # Skipping dropout and Norm
+            ## MLP Block
             if SP:
-                start = time.perf_counter_ns()
-                torch.distributed.all_gather_into_tensor(
-                    interim2, partial_interim2, group=tp_group
-                )
-                synchronize(args.device)
-                end = time.perf_counter_ns()
-                if warmup:
-                    T_dict_individual["T_allgather_2"][m][i] = 0.0
-                    t_ag_2 = 0.0
-                else:
-                    T_dict_individual["T_allgather_2"][m][i] = (end - start)
-                    t_ag_2 += end-start
-            start = time.perf_counter_ns()
-            interim3 = torch.matmul(interim2, mat_h_4h.t())
-            #if rank == 0:
-            #logging.info(f"Interim 3 Shape = {interim3.shape}")
-            synchronize(args.device)
-            end = time.perf_counter_ns()
-            if warmup:
-                T_dict_individual["T_H_4H"][m][i] = 0.0
-                t_h_4h = 0.0
-            else:
-                T_dict_individual["T_H_4H"][m][i] = (end - start)
-                t_h_4h += end-start
-            start = end
-            interim4 = torch.matmul(interim3, mat_4h_h.t())
-            #if rank == 0:
-            #logging.info(f"Interim 4 Shape = {interim4.shape}")
-            synchronize(args.device)
-            end = time.perf_counter_ns()
-            if warmup:
-                T_dict_individual["T_4H_H"][m][i] = 0.0
-                t_4h_h = 0.0
-            else:
-                T_dict_individual["T_4H_H"][m][i] = (end - start)
-                t_4h_h += end-start
-            #
+                _, T_allgather_2 = timed(lambda: dist.all_gather_into_tensor(interim2, partial_interim2, group=tp_group))
+            interim3, T_H_4H = timed(lambda: torch.matmul(interim2, mat_h_4h.t())) # Up projection: [s, b, h] -> [s, b, 4h]
+            interim4, T_4H_H = timed(lambda: torch.matmul(interim3, mat_4h_h.t())) # Down projection: [s, b, 4h] -> [s, b, h]
             if SP:
-                start = time.perf_counter_ns()
-                #logging.info("Doing Reduce Scatter Now")
-                torch.distributed.reduce_scatter_tensor(
-                    partial_interim4, interim4, group=tp_group
-                )
-                synchronize(args.device)
-                end = time.perf_counter_ns()
-                if warmup:
-                    T_dict_individual["T_reduce_scatter_2"][m][i] = 0.0
-                    t_rs_2 = 0.0
-                else:
-                    T_dict_individual["T_reduce_scatter_2"][m][i] = (end - start)
-                    t_rs_2 += end-start
+                _, T_reduce_scatter_2 = timed(lambda: dist.reduce_scatter_tensor(partial_interim4, interim4, group=tp_group))
             else:
-                start = time.perf_counter_ns()
-                torch.distributed.all_reduce(
-                    interim4, group=tp_group
-                )
-                synchronize(args.device)
-                end = time.perf_counter_ns()
-                if warmup:
-                    T_dict_individual["T_allreduce_2"][m][i] = 0.0
-                    t_ardc_2 = 0.0
-                else:
-                    T_dict_individual["T_allreduce_2"][m][i] = (end - start)
-                    t_ardc_2 += end-start
-        synchronize(args.device)
+                _, T_allreduce_2 = timed(lambda: dist.all_reduce(interim4, group=tp_group))
+            # Log op's time each layer
+            for timed_op, _ in T_dict_individual.items():
+                if timed_op not in ["T_grad_sync", "T_timing_loop"]:
+                    T_dict_individual[timed_op][i, l] = eval(timed_op)
+        ## Grad sync  # TODO: make all-reduce async
         for k in range(n_iter_grad_sync):
-            start = time.perf_counter_ns()
-            torch.distributed.all_reduce(
-                allreduce_grad, group=dp_group
-            )
-            synchronize(args.device)
-            end = time.perf_counter_ns()
-            if warmup:
-                T_grad_sync_individual[m][k] = 0.0
-                t_grad = 0.0
+            _, T_grad_sync_individual[i, k] = timed(lambda: dist.all_reduce(allreduce_grad, group=dp_group))
+        timing_loop_end_time = sync_and_time(args.device)
+        T_grad_sync = T_grad_sync_individual[i, :].sum()
+        T_timing_loop = (timing_loop_end_time-timing_loop_start_time)
+        timing_loop_time += T_timing_loop
+        # Log op's time each iter
+        # TODO: make normalization (e.g. / 1e6) consistent across all times
+        for op, _ in T_dict_total.items():
+            if op in ["T_grad_sync", "T_timing_loop"]:
+                T_dict_total[op][i] = eval(op) / 1e6
             else:
-                T_grad_sync_individual[m][k] = (end - start)
-                t_grad += end-start
-        T_dict_total["T_grad_sync"][m] = (t_grad / 1e6 )
-        synchronize(args.device)
-        T_dict_total["T_allgather_1"][m] = (t_ag_1 / 1e6 )
-        T_dict_total["T_QKV"][m] = (t_qkv / 1e6 )
-        T_dict_total["T_WO"][m] = (t_WO / 1e6 )
-        T_dict_total["T_reduce_scatter_1"][m] = (t_rs_1 / 1e6 )
-        T_dict_total["T_allreduce_1"][m] = (t_ardc_1 / 1e6 )
-        T_dict_total["T_allgather_2"][m] = (t_ag_2 / 1e6 )
-        T_dict_total["T_H_4H"][m] = (t_h_4h / 1e6 )
-        T_dict_total["T_4H_H"][m] = (t_4h_h / 1e6 )
-        T_dict_total["T_reduce_scatter_2"][m] = (t_rs_2 / 1e6 )
-        T_dict_total["T_allreduce_2"][m] = (t_ardc_2 / 1e6 )
-        timing_loop_end_time=time.perf_counter_ns()
-        T_dict_total["T_timing_loop"][m] = ((timing_loop_end_time - timing_loop_start_time) / 1e6 )  
-        timing_loop_time += (timing_loop_end_time - timing_loop_start_time)
-        timing_loop_start_time = timing_loop_end_time
-    #return T_dict_individual, T_dict_total, T_grad_sync_individual
-    return TensorParallelResults(T_dict_individual, T_dict_total, T_grad_sync_individual, interim1, interim2, interim3, interim4, allreduce_grad)
+                T_dict_total[op][i] = T_dict_individual[op][i, :].sum() / 1e6
+        # logging.info(f"Input Shape = {input.shape}")
+        # logging.info(f"Interim 1 Shape = {interim1.shape}")
+        # logging.info(f"Interim 2 Shape = {interim2.shape}")
+        # logging.info(f"Iter {m}, layer {i}, allreduce buffer = {interim2.shape}")
+        # logging.info(f"Interim 3 Shape = {interim3.shape}")
+        # logging.info(f"Interim 4 Shape = {interim4.shape}")
+    return TensorParallelResults(
+        T_dict_individual, 
+        T_dict_total, 
+        T_grad_sync_individual, 
+        interim1, 
+        interim2, 
+        interim3, 
+        interim4, 
+        allreduce_grad
+    )
 
-rank = int(MPI.COMM_WORLD.Get_rank())
-world_size = int(MPI.COMM_WORLD.Get_size())
+def timed(function):
+    '''
+        lambda: func(function_to_time())
+    '''
+    ## TODO: Change to record GPU Events to time without synchronizing device and Host
+    strt = sync_and_time(args.device)
+    res = function()
+    end = sync_and_time(args.device)
+    return res, end-strt
 
+# @trace_func
+# def synchronize(device):
+#     if device == "cuda":
+#         return torch.cuda.synchronize()
+#     elif device == "xpu":
+#         return torch.xpu.synchronize()
+#     else:
+#         raise NotImplementedError("This method is not implemented yet.")
+#         return None
+    
 @trace_func
-def synchronize(device):
-    if device == "cuda":
-        return torch.cuda.synchronize()
-    elif device == "xpu":
-        return torch.xpu.synchronize()
-    else:
+def sync_and_time(device):
+    if device not in ["cuda", "xpu"]:
         raise NotImplementedError("This method is not implemented yet.")
-        return None
+    elif device == "cuda":
+        torch.cuda.synchronize()
+    elif device == "xpu":
+        torch.xpu.synchronize()
+    return time.perf_counter_ns()
 
 @trace_func
 def get_device_string(device):
@@ -358,6 +236,29 @@ def matmul_flops(input_shape, other_shape):
     #Reference: https://math.stackexchange.com/questions/3512976/proof-of-of-flops-in-matrix-multiplication
     return np.prod(input_shape[:-1]) * other_shape[-1] * (2*other_shape[-2]-1)
 
+
+warmup=args.warmup_iterations
+log_directory = args.log_directory  # Directory for logs
+log_filename = args.log_file  # Log file name
+log_filepath = os.path.join(log_directory, log_filename)
+
+if args.device == "xpu":
+    import intel_extension_for_pytorch as ipex
+    import oneccl_bindings_for_pytorch
+
+if args.precision == "float32":
+    data_type = torch.float32
+    data_type_multiplier = 32 ## 32 Bits = 4 Bytes
+elif args.precision == "float16":
+    data_type = torch.float16
+    data_type_multiplier = 16
+elif args.precision == "bfloat16":
+    data_type = torch.bfloat16
+    data_type_multiplier = 16 ## 16 Bits
+
+rank = int(MPI.COMM_WORLD.Get_rank())
+world_size = int(MPI.COMM_WORLD.Get_size())
+
 if args.logging:
     if rank == 0 and not os.path.exists(log_directory):
         # Create log directory if it doesn't exist
@@ -369,13 +270,10 @@ else:
     logging.basicConfig(level="INFO")
 
 logging.info(f"rank {rank}/{world_size}")
-#device_count = torch.xpu.device_count()
-#device_count = int(os.environ["NGPU_PER_HOST"])
 
 visible_device = rank % get_device_count(args.device)
 local_rank = visible_device
 set_device(visible_device)
-
 #os.environ['CCL_LOCAL_RANK'] = str(device)
 #os.environ['CCL_LOCAL_SIZE'] = str(device_count)
 #backend = "ccl"
@@ -396,7 +294,7 @@ os.environ["MASTER_ADDR"]   = master_addr
 os.environ["MASTER_PORT"]   = str(master_port)
 
 #torch.xpu.set_device(device)
-torch.distributed.init_process_group(
+dist.init_process_group(
     backend=get_backend(args.device),
     init_method="env://",
     world_size=world_size,
@@ -412,7 +310,7 @@ def get_tp_group(TP, world_size):
         ranks = [j for j in range(i*TP,(i+1)*TP)]
         if rank==0:
             logging.info(f"TP group = {ranks}")
-        group = torch.distributed.new_group(ranks)
+        group = dist.new_group(ranks)
         if rank in ranks:
             tp_group=group
     return tp_group
@@ -437,12 +335,12 @@ if dp_switch:
         ranks = [i for i in range(i,world_size,TP)]
         if rank==0:
             logging.info(f"DP group = {ranks}")
-        group = torch.distributed.new_group(ranks)
+        group = dist.new_group(ranks)
         if rank in ranks:
             dp_group=group
 else:
     ranks = [i for i in range(0,world_size,TP)]
-    dp_group = torch.distributed.new_group(ranks)
+    dp_group = dist.new_group(ranks)
     if rank==0:
         logging.info(f"DP group = {ranks}")
 
@@ -459,8 +357,14 @@ SP=args.sequence_parallel_switch
 if SP:
     assert S % TP == 0, "sequence must be dividable by TP degree with sequence parallelism enabled"
 
-partial_input = torch.normal(mean=args.init_mean, std=torch.ones([S//TP, M, H], dtype=data_type, device=get_device_string(args.device))*args.init_std)
-input = torch.normal(mean=args.init_mean, std=torch.ones([S, M, H], dtype=data_type, device=get_device_string(args.device))*args.init_std)
+partial_input = torch.normal(
+    mean=args.init_mean, 
+    std=torch.ones([S//TP, M, H], dtype=data_type, device=get_device_string(args.device))*args.init_std
+)
+input = torch.normal(
+    mean=args.init_mean, 
+    std=torch.ones([S, M, H], dtype=data_type, device=get_device_string(args.device))*args.init_std
+)
 partial_interim2 = torch.zeros([S//TP, M, H], dtype=data_type, device=get_device_string(args.device))
 partial_interim4 = torch.zeros([S//TP, M, H], dtype=data_type, device=get_device_string(args.device))
 
@@ -502,15 +406,20 @@ mat_4h_h = torch.normal(mean=args.init_mean, std=torch.ones(
     )*args.init_std)
 
 n_layers = args.number_of_transformer_layers
-number_of_total_parameters = ((attn_W_QKV.shape[0]*attn_W_QKV.shape[1] + attn_WO.shape[0]*attn_WO.shape[1] +  mat_h_4h.shape[0]*mat_h_4h.shape[1] +  mat_4h_h.shape[0]*mat_4h_h.shape[1]) * n_layers)
+number_of_total_parameters = (
+    (attn_W_QKV.shape[0]*attn_W_QKV.shape[1]
+    +attn_WO.shape[0]*attn_WO.shape[1]
+    +mat_h_4h.shape[0]*mat_h_4h.shape[1]
+    +mat_4h_h.shape[0]*mat_4h_h.shape[1]) 
+     * n_layers)
 #logging.info(f"Parameters = {number_of_total_parameters / 1e9} Billions")
-
 # number of iterations for the gradient synchronization loop
 
 highest_bucket_size = int(args.grad_allreduce_bucket)
 n_iter_grad_sync = math.ceil(number_of_total_parameters / highest_bucket_size)
 
-allreduce_grad = torch.normal(mean=0.0, std=torch.ones([highest_bucket_size], dtype=data_type, device=get_device_string(args.device))*0.01)
+allreduce_grad = torch.normal(mean=0.0, 
+    std=torch.ones([highest_bucket_size], dtype=data_type, device=get_device_string(args.device))*0.01)
 
 if rank==0:
     logging.info("start loop")
@@ -521,7 +430,6 @@ if args.trace is not None:
     activities=[ProfilerActivity.CPU]
     if args.device == "xpu":
         activities.append(ProfilerActivity.XPU)
-        #pass
     else:
         activities.append(ProfilerActivity.CUDA)
     with profile(activities=activities, record_shapes=True) as prof:
@@ -529,18 +437,13 @@ if args.trace is not None:
                                  input=input, partial_input=partial_input, partial_interim2=partial_interim2, 
                                  partial_interim4=partial_interim4, attn_W_QKV=attn_W_QKV, attn_WO=attn_WO, 
                                  mat_h_4h=mat_h_4h, 
-                                 mat_4h_h=mat_4h_h, allreduce_grad=allreduce_grad, warmup=False)
+                                 mat_4h_h=mat_4h_h, allreduce_grad=allreduce_grad)
     prof.export_chrome_trace(f"{args.log_directory}/{args.trace}-{rank}-of-{world_size}.json")
 else:
-    tensor_parallel(args.iterations, args.number_of_transformer_layers, n_iter_grad_sync, 
-                             input=input, partial_input=partial_input, partial_interim2=partial_interim2, 
-                             partial_interim4=partial_interim4, attn_W_QKV=attn_W_QKV, attn_WO=attn_WO,
-                             mat_h_4h=mat_h_4h, mat_4h_h=mat_4h_h, allreduce_grad=allreduce_grad, warmup=True)
-
     result = tensor_parallel(args.iterations, args.number_of_transformer_layers, n_iter_grad_sync, 
                              input=input, partial_input=partial_input, partial_interim2=partial_interim2, 
                              partial_interim4=partial_interim4, attn_W_QKV=attn_W_QKV, attn_WO=attn_WO,
-                             mat_h_4h=mat_h_4h, mat_4h_h=mat_4h_h, allreduce_grad=allreduce_grad, warmup=False)
+                             mat_h_4h=mat_h_4h, mat_4h_h=mat_4h_h, allreduce_grad=allreduce_grad)
 
 T_dict_individual = result.T_dict_individual
 T_dict_total = result.T_dict_total
@@ -559,24 +462,27 @@ tp_allreduce_2_data_volume = (interim4.shape[0] * interim4.shape[-1] * data_type
 
 sp_allgather_data_volume = ((TP - 1) * (args.sequence_length // TP) * args.hidden_dimension * data_type_multiplier) 
 
-def format_logging_timings(text, data, key, time_multiplier=1.0):
+def format_logging_timings(text, data, key, time_multiplier=1):
     """
     TODO document here
     """
     if key is not None:
+        data[key] = data[key][args.warmup_iterations:]  # Extract warmup iters
         logging.info("{text} takes max. {max_time:.4f} ms,  min. {min_time:.4f} ms, avg. {avg_time:.4f} ms"
         .format(text=text, max_time=np.max(data[key])/time_multiplier, 
         min_time=np.min(data[key])/time_multiplier, avg_time=np.mean(data[key])/time_multiplier))
     else:
+        data = data[args.warmup_iterations:]  # Extract warmup iters
         logging.info("{text} takes max. {max_time:.4f} ms,  min. {min_time:.4f} ms, avg. {avg_time:.4f} ms"
         .format(text=text, max_time=np.max(data)/time_multiplier, 
         min_time=np.min(data)/time_multiplier, avg_time=np.mean(data)/time_multiplier))
 
 
-def format_logging_flops(text, in_shape, weight_shape, layers, data, key, time_multiplier=1.0):
+def format_logging_flops(text, in_shape, weight_shape, layers, data, key, time_multiplier=1):
     """
     TODO document here
     """
+    data[key] = data[key][args.warmup_iterations:]  # Extract warmup iters
     flops = matmul_flops(in_shape, weight_shape)*layers
     max_time=np.max(data[key])
     min_time=np.min(data[key])
@@ -621,32 +527,42 @@ if rank == 0:
     else:
         logging.info(f"TP Allreduce 1 data volume per layer per iteration = {(tp_allreduce_1_data_volume ) / 8 / 1e6} MB")
         logging.info(f"TP Allreduce 2 data volume per layer per iteration = {(tp_allreduce_2_data_volume ) / 8 / 1e6} MB")
-        logging.info(f"TP Allreduce 1 Max. Throughput per layer per iteration = {((tp_allreduce_1_data_volume / 8 ) / np.min(T_dict_individual['T_allreduce_1'])) * 1e3} MB/s")
-        logging.info(f"TP Allreduce 2 Max. Throughput per layer per iteration = {((tp_allreduce_2_data_volume / 8 ) / np.min(T_dict_individual['T_allreduce_2'])) * 1e3} MB/s")
+        logging.info(f"TP Allreduce 1 Max. Throughput per layer per iteration = {((tp_allreduce_1_data_volume/8) / np.min(T_dict_individual['T_allreduce_1'])) * 1e3} MB/s")
+        logging.info(f"TP Allreduce 2 Max. Throughput per layer per iteration = {((tp_allreduce_2_data_volume/8) / np.min(T_dict_individual['T_allreduce_2'])) * 1e3} MB/s")
     logging.info("\n==== Timings per transformer layer ====")
-    format_logging_timings("First Allgather for SP", T_dict_individual, 'T_allgather_1', 1e6)
+    if SP:
+        format_logging_timings("First Allgather for SP", T_dict_individual, 'T_allgather_1', 1e6)
     format_logging_timings("Column Parallel Attention Matrix W_QKV multiplication", T_dict_individual, 'T_QKV', 1e6)
     format_logging_timings("Row Parallel Attention Matrix WO multiplication", T_dict_individual, 'T_WO', 1e6)
-    format_logging_timings("First Reduce Scatter for SP", T_dict_individual, 'T_reduce_scatter_1', 1e6)
-    format_logging_timings("First Allreduce for TP", T_dict_individual, 'T_allreduce_1', 1e6)
-    format_logging_timings("Second Allgather for SP", T_dict_individual, 'T_allgather_2', 1e6)
+    if SP:
+        format_logging_timings("First Reduce Scatter for SP", T_dict_individual, 'T_reduce_scatter_1', 1e6)
+        format_logging_timings("Second Allgather for SP", T_dict_individual, 'T_allgather_2', 1e6)
+    else:
+        format_logging_timings("First Allreduce for TP", T_dict_individual, 'T_allreduce_1', 1e6)
     format_logging_timings("H --> 4H Matrix multiplication", T_dict_individual, 'T_H_4H', 1e6)
     format_logging_timings("4H --> H Matrix multiplication", T_dict_individual, 'T_4H_H', 1e6)
-    format_logging_timings("Second Reduce Scatter for SP", T_dict_individual, 'T_reduce_scatter_2', 1e6)
-    format_logging_timings("Second Allreduce for TP", T_dict_individual, 'T_allreduce_2', 1e6)
+    if SP:
+        format_logging_timings("Second Reduce Scatter for SP", T_dict_individual, 'T_reduce_scatter_2', 1e6)
+    else:
+        format_logging_timings("Second Allreduce for TP", T_dict_individual, 'T_allreduce_2', 1e6)
     format_logging_timings("Grad Sync Allreduce over DP groups", T_grad_sync_individual, None, 1e6)
     ###################
     logging.info("\n==== Total Times for all transformer layers ====")
-    format_logging_timings("First Allgather for SP", T_dict_total, 'T_allgather_1')
+    if SP:
+        format_logging_timings("First Allgather for SP", T_dict_total, 'T_allgather_1')
     format_logging_timings("Column Parallel Attention Matrix W_QKV multiplication", T_dict_total, 'T_QKV')
     format_logging_timings("Row Parallel Attention Matrix WO multiplication", T_dict_total, 'T_WO')
-    format_logging_timings("First Reduce Scatter for SP", T_dict_total, 'T_reduce_scatter_1')
-    format_logging_timings("First Allreduce for TP", T_dict_total, 'T_allreduce_1')
-    format_logging_timings("Second Allgather for SP", T_dict_total, 'T_allgather_2')
+    if SP:
+        format_logging_timings("First Reduce Scatter for SP", T_dict_total, 'T_reduce_scatter_1')
+        format_logging_timings("Second Allgather for SP", T_dict_total, 'T_allgather_2')
+    else:
+        format_logging_timings("First Allreduce for TP", T_dict_total, 'T_allreduce_1')
     format_logging_timings("H --> 4H Matrix multiplication", T_dict_total, 'T_H_4H')
     format_logging_timings("4H --> H Matrix multiplication", T_dict_total, 'T_4H_H')
-    format_logging_timings("Second Reduce Scatter for SP", T_dict_total, 'T_reduce_scatter_2')
-    format_logging_timings("Second Allreduce for TP", T_dict_total, 'T_allreduce_2')
+    if SP:
+        format_logging_timings("Second Reduce Scatter for SP", T_dict_total, 'T_reduce_scatter_2')
+    else:
+        format_logging_timings("Second Allreduce for TP", T_dict_total, 'T_allreduce_2')
     format_logging_timings("Grad Sync Allreduce over DP groups", T_dict_total, 'T_grad_sync')
 
     logging.info(f"Total time taken for {args.iterations} timing loops = {sum(T_dict_total['T_timing_loop'])} ms")
@@ -658,16 +574,20 @@ if rank == 0:
     format_logging_flops("4H --> H Matrix multiplication", interim3.shape, mat_4h_h.t().shape, n_layers, T_dict_total, 'T_4H_H')
     ###################
     logging.info("\n==== ALL RESULTS ====")
-    logging.info(f"First allgather total times from timing loop = {T_dict_total['T_allgather_1']} ms")
-    logging.info(f"First reduce scatter total times from timing loop = {T_dict_total['T_reduce_scatter_1']} ms")
-    logging.info(f"First allreduce total times from timing loop = {T_dict_total['T_allreduce_1']} ms")
+    if SP:
+        logging.info(f"First allgather total times from timing loop = {T_dict_total['T_allgather_1']} ms")
+        logging.info(f"First reduce scatter total times from timing loop = {T_dict_total['T_reduce_scatter_1']} ms")
+    else:
+        logging.info(f"First allreduce total times from timing loop = {T_dict_total['T_allreduce_1']} ms")
     logging.info(f"Attention W_QKV matrix multiplication total times from timing loop = {T_dict_total['T_QKV']} ms")
     logging.info(f"Attention WO matrix multiplication total times from timing loop = {T_dict_total['T_WO']} ms")
     logging.info(f"Weight matrix (H --> 4H) multiplication total times from timing loop = {T_dict_total['T_H_4H']} ms")
     logging.info(f"Weight matrix (4H --> H) multiplication total times from timing loop = {T_dict_total['T_4H_H']} ms")
-    logging.info(f"Second allgather total times from timing loop = {T_dict_total['T_allgather_2']} ms")
-    logging.info(f"Second reduce scatter total times from timing loop = {T_dict_total['T_reduce_scatter_2']} ms")
-    logging.info(f"Second allreduce total times from timing loop = {T_dict_total['T_allreduce_2']} ms")
+    if SP:
+        logging.info(f"Second allgather total times from timing loop = {T_dict_total['T_allgather_2']} ms")
+        logging.info(f"Second reduce scatter total times from timing loop = {T_dict_total['T_reduce_scatter_2']} ms")
+    else:
+        logging.info(f"Second allreduce total times from timing loop = {T_dict_total['T_allreduce_2']} ms")
     logging.info(f"Grad Sync Total times from timing loop = {T_dict_total['T_grad_sync']} ms")
     logging.info(f"Timing loop times = {T_dict_total['T_timing_loop']}")
     logging.info(f"==== Finished Running ====")
@@ -677,15 +597,11 @@ if args.save:
                     "T_dict_total": result.T_dict_total,
                     "T_grad_sync_individual" : result.T_grad_sync_individual}
     #np.save(os.path.join(result_dir, args.log_file), dict(result._asdict())) ## directly converts a namedtuple to a dictionary, doesn't play well with GPU tensors.
-
     result_dir = os.path.join(args.log_directory, "timings")
     result_dir = os.path.join(result_dir, args.log_file)
     print("saving to:", result_dir)
     if not os.path.exists(result_dir):
         os.makedirs(result_dir)
-
     np.save(os.path.join(result_dir, f"rank_{rank}"), timing_dict)
-    
-
-torch.distributed.barrier()
+dist.barrier()
 exit()
