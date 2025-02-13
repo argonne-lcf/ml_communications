@@ -13,9 +13,6 @@ import torch.distributed
 from torch.profiler import profile, record_function, ProfilerActivity
 import torch.distributed as dist
 
-#import intel_extension_for_pytorch as ipex  # noqa: F401 # type: ignore
-#import oneccl_bindings_for_pytorch  # noqa: F401 # type: ignore
-
 parser = argparse.ArgumentParser(description="parse input arguments for tensor and data  parallel partial benchmark")
 parser.add_argument("-s", "--sequence_length",
                     help="Maximum sequence length. The size of the ALLGATHER buffer",
@@ -60,7 +57,6 @@ parser.add_argument("-dir", "--log_directory", help="Output file path",
 parser.add_argument("--logging", help="Switch logging on", action='store_true')
 parser.add_argument("--save", help="Save detail results in npy format", action='store_true') ## Generates huge files, use with caution
 parser.add_argument("--trace", default=None, type=str)
-
 args = parser.parse_args()
 
 def trace_func(func):
@@ -74,16 +70,27 @@ def trace_func(func):
    return wrapper
 
 @trace_func
-def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync, 
-                    input, partial_input, partial_interim2, 
-                    partial_interim4, attn_W_QKV, attn_WO, 
-                    mat_h_4h, mat_4h_h, allreduce_grad, warmup=False):
+def tensor_parallel(
+    N_timing_loop, 
+    n_layers, 
+    n_iter_grad_sync, input, 
+    partial_input, 
+    partial_interim2, 
+    partial_interim4, 
+    attn_W_QKV, 
+    attn_WO, 
+    mat_h_4h, 
+    mat_4h_h, 
+    allreduce_grad, 
+    warmup=False
+):
     # Define operations based on parallelisms
     operations = ["QKV", "WO", "H_4H", "4H_H", "grad_sync", "timing_loop"]
     if SP:
         operations += ["allgather_1", "allgather_2", "reduce_scatter_1", "reduce_scatter_2"]
     else:
         operations += ["allreduce_1", "allreduce_2"]
+
     # Initialize the dictionary to log time
     T_dict_individual = {
         f'T_{operation}': np.zeros((N_timing_loop, n_layers)) 
@@ -97,6 +104,8 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
         ["T_dict_individual", "T_dict_total", "T_grad_sync_individual", 
          "interim1", "interim2", "interim3", "interim4", "allreduce_grad"]
     )
+
+    # Run pseudo model and time
     for i in range(N_timing_loop):
         timing_loop_start_time=sync_and_time(args.device)
         timing_loop_time = 0.0
@@ -111,7 +120,9 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
                 _, T_reduce_scatter_1 = timed(lambda: dist.reduce_scatter_tensor(partial_interim2, interim2, group=tp_group))
             else:
                 _, T_allreduce_1 = timed(lambda: dist.all_reduce(interim2, group=tp_group))
-            # Skipping dropout and Norm
+
+            ## Skipping dropout and Norm
+            
             ## MLP Block
             if SP:
                 _, T_allgather_2 = timed(lambda: dist.all_gather_into_tensor(interim2, partial_interim2, group=tp_group))
@@ -121,6 +132,7 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
                 _, T_reduce_scatter_2 = timed(lambda: dist.reduce_scatter_tensor(partial_interim4, interim4, group=tp_group))
             else:
                 _, T_allreduce_2 = timed(lambda: dist.all_reduce(interim4, group=tp_group))
+
             # Log op's time each layer
             for timed_op, _ in T_dict_individual.items():
                 if timed_op not in ["T_grad_sync", "T_timing_loop"]:
@@ -132,6 +144,7 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
         T_grad_sync = T_grad_sync_individual[i, :].sum()
         T_timing_loop = (timing_loop_end_time-timing_loop_start_time)
         timing_loop_time += T_timing_loop
+        
         # Log op's time each iter
         # TODO: make normalization (e.g. / 1e6) consistent across all times
         for op, _ in T_dict_total.items():
@@ -139,22 +152,8 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
                 T_dict_total[op][i] = eval(op) / 1e6
             else:
                 T_dict_total[op][i] = T_dict_individual[op][i, :].sum() / 1e6
-        # logging.info(f"Input Shape = {input.shape}")
-        # logging.info(f"Interim 1 Shape = {interim1.shape}")
-        # logging.info(f"Interim 2 Shape = {interim2.shape}")
-        # logging.info(f"Iter {m}, layer {i}, allreduce buffer = {interim2.shape}")
-        # logging.info(f"Interim 3 Shape = {interim3.shape}")
-        # logging.info(f"Interim 4 Shape = {interim4.shape}")
-    return TensorParallelResults(
-        T_dict_individual, 
-        T_dict_total, 
-        T_grad_sync_individual, 
-        interim1, 
-        interim2, 
-        interim3, 
-        interim4, 
-        allreduce_grad
-    )
+    return TensorParallelResults(T_dict_individual, T_dict_total, T_grad_sync_individual, 
+                                 interim1, interim2, interim3, interim4, allreduce_grad)
 
 def timed(function):
     '''
@@ -166,66 +165,53 @@ def timed(function):
     end = sync_and_time(args.device)
     return res, end-strt
 
-# @trace_func
-# def synchronize(device):
-#     if device == "cuda":
-#         return torch.cuda.synchronize()
-#     elif device == "xpu":
-#         return torch.xpu.synchronize()
-#     else:
-#         raise NotImplementedError("This method is not implemented yet.")
-#         return None
-    
 @trace_func
 def sync_and_time(device):
-    if device not in ["cuda", "xpu"]:
+    if device not in ["cuda", "xpu", "cpu"]:
         raise NotImplementedError("This method is not implemented yet.")
-    elif device == "cuda":
+    if device == "cuda":
         torch.cuda.synchronize()
-    elif device == "xpu":
+    if device == "xpu":
         torch.xpu.synchronize()
     return time.perf_counter_ns()
 
-@trace_func
-def get_device_string(device):
-    if device == "cuda": 
-        return f"cuda:{torch.cuda.current_device()}" 
-    elif device == "xpu":
-        
-        return f"xpu:{torch.xpu.current_device()}" 
-    else:
-        raise NotImplementedError("This method is not implemented yet.")
-        return None
+# @trace_func
+# def get_device_string(device):
+#     if device == "cuda": 
+#         return f"cuda:{torch.cuda.current_device()}" 
+#     elif device == "xpu":
+#         return f"xpu:{torch.xpu.current_device()}" 
+#     else:
+#         raise NotImplementedError("This method is not implemented yet.")
 
 @trace_func
 def get_device_count(device):
+    '''returns the local world size'''
     if device == "cuda":
-        return torch.cuda.device_count() 
+        return torch.cuda.device_count()
     elif device == "xpu":
-        return torch.xpu.device_count() 
-    else:
-        raise NotImplementedError("This method is not implemented yet.")
-        return None
+        return torch.xpu.device_count()
+    elif device == "cpu":
+        return int(os.environ["LOCAL_WORLD_SIZE"])
 
-@trace_func
-def set_device(visible_device):
-    if args.device == "cuda":
-        return torch.cuda.set_device(visible_device)
-    elif args.device == "xpu":
-        return torch.xpu.set_device(visible_device)
-    else:
-        raise NotImplementedError("This method is not implemented yet.")
-        return None
+# @trace_func
+# def set_device(visible_device):
+#     if args.device == "cuda":
+#         return torch.cuda.set_device(visible_device)
+#     elif args.device == "xpu":
+#         return torch.xpu.set_device(visible_device)
+#     else:
+#         raise NotImplementedError("This method is not implemented yet.")
 
 @trace_func
 def get_backend(device):
     if device =="cuda":
         return "nccl"
-    elif device == "xpu":
+    if device == "xpu":
         return "ccl"
-    else:
-        raise NotImplementedError("This method is not implemented yet.")
-        return None
+    if device == "cpu":
+        return "gloo"
+    raise NotImplementedError("This method is not implemented yet.")
 
 def matmul_flops(input_shape, other_shape):
     """
@@ -236,16 +222,13 @@ def matmul_flops(input_shape, other_shape):
     #Reference: https://math.stackexchange.com/questions/3512976/proof-of-of-flops-in-matrix-multiplication
     return np.prod(input_shape[:-1]) * other_shape[-1] * (2*other_shape[-2]-1)
 
-
 warmup=args.warmup_iterations
 log_directory = args.log_directory  # Directory for logs
 log_filename = args.log_file  # Log file name
 log_filepath = os.path.join(log_directory, log_filename)
-
 if args.device == "xpu":
     import intel_extension_for_pytorch as ipex
     import oneccl_bindings_for_pytorch
-
 if args.precision == "float32":
     data_type = torch.float32
     data_type_multiplier = 32 ## 32 Bits = 4 Bytes
@@ -255,25 +238,36 @@ elif args.precision == "float16":
 elif args.precision == "bfloat16":
     data_type = torch.bfloat16
     data_type_multiplier = 16 ## 16 Bits
-
 rank = int(MPI.COMM_WORLD.Get_rank())
 world_size = int(MPI.COMM_WORLD.Get_size())
+
+## torchrun
+# dist.init_process_group(
+#     backend=get_backend(args.device),
+# )
+# rank = dist.get_rank()
+# world_size = dist.get_world_size()
+# local_rank = os.environ["LOCAL_RANK"]
+# print(f"rank: {rank}")
+# print(f"world_size: {world_size}")
+# print(f"local_rank: {local_rank}")
 
 if args.logging:
     if rank == 0 and not os.path.exists(log_directory):
         # Create log directory if it doesn't exist
         os.makedirs(log_directory)
-
     MPI.COMM_WORLD.Barrier()
+    # dist.Barrier()
     logging.basicConfig(filename=log_filepath, filemode="a", level="INFO")
 else:
     logging.basicConfig(level="INFO")
-
 logging.info(f"rank {rank}/{world_size}")
 
-visible_device = rank % get_device_count(args.device)
-local_rank = visible_device
-set_device(visible_device)
+local_rank = rank % get_device_count(args.device)
+# print(f"rank: {rank}")
+# print(f"get_device_count(args.device): {get_device_count(args.device)}")
+
+# set_device(local_rank)
 #os.environ['CCL_LOCAL_RANK'] = str(device)
 #os.environ['CCL_LOCAL_SIZE'] = str(device_count)
 #backend = "ccl"
@@ -293,7 +287,7 @@ master_port                 = MPI.COMM_WORLD.bcast(master_port, root=0)
 os.environ["MASTER_ADDR"]   = master_addr
 os.environ["MASTER_PORT"]   = str(master_port)
 
-#torch.xpu.set_device(device)
+# torch.xpu.set_device(device)
 dist.init_process_group(
     backend=get_backend(args.device),
     init_method="env://",
@@ -302,7 +296,7 @@ dist.init_process_group(
 )
 
 TP = args.tensor_parallel_degree
-assert TP % 2 == 0
+assert TP % 2 == 0  # TODO: Why is this the case? 
 
 def get_tp_group(TP, world_size):
     tp_group=None
@@ -343,7 +337,7 @@ else:
     dp_group = dist.new_group(ranks)
     if rank==0:
         logging.info(f"DP group = {ranks}")
-
+# all_group = dist.new_group()
 """
 0,12,24,36
 1,13,25,37
@@ -352,74 +346,75 @@ else:
 S = args.sequence_length #4608 #4608 sequence length
 H = args.hidden_dimension #9216 #9216 hidden dimension
 M = 1
-all_gather_buffer = torch.zeros([S, M, H], dtype=data_type, device=get_device_string(args.device))
+all_gather_buffer = torch.zeros([S, M, H], dtype=data_type, device=local_rank)
 SP=args.sequence_parallel_switch
 if SP:
     assert S % TP == 0, "sequence must be dividable by TP degree with sequence parallelism enabled"
 
 partial_input = torch.normal(
     mean=args.init_mean, 
-    std=torch.ones([S//TP, M, H], dtype=data_type, device=get_device_string(args.device))*args.init_std
+    std=torch.ones([S//TP, M, H], dtype=data_type, device=local_rank)*args.init_std
 )
 input = torch.normal(
     mean=args.init_mean, 
-    std=torch.ones([S, M, H], dtype=data_type, device=get_device_string(args.device))*args.init_std
+    std=torch.ones([S, M, H], dtype=data_type, device=local_rank)*args.init_std
 )
-partial_interim2 = torch.zeros([S//TP, M, H], dtype=data_type, device=get_device_string(args.device))
-partial_interim4 = torch.zeros([S//TP, M, H], dtype=data_type, device=get_device_string(args.device))
+partial_interim2 = torch.zeros([S//TP, M, H], dtype=data_type, device=local_rank)
+partial_interim4 = torch.zeros([S//TP, M, H], dtype=data_type, device=local_rank)
 
 """
 if SP:
-    partial_input = torch.ones([S//TP, M, H], dtype=data_type, device=get_device_string(args.device))
-    input = torch.ones([S, M, H], dtype=data_type, device=get_device_string(args.device))
-    partial_interim2 = torch.zeros([S//TP, M, H], dtype=data_type, device=get_device_string(args.device))
-    partial_interim4 = torch.zeros([S//TP, M, H], dtype=data_type, device=get_device_string(args.device)) 
+    partial_input = torch.ones([S//TP, M, H], dtype=data_type, device=local_rank)
+    input = torch.ones([S, M, H], dtype=data_type, device=local_rank)
+    partial_interim2 = torch.zeros([S//TP, M, H], dtype=data_type, device=local_rank)
+    partial_interim4 = torch.zeros([S//TP, M, H], dtype=data_type, device=local_rank) 
 else:
-    input = torch.ones([S, M, H], dtype=data_type, device=get_device_string(args.device))
+    input = torch.ones([S, M, H], dtype=data_type, device=local_rank)
 """
 #logging.info(f"Input shape = {input.shape}")
 attn_W_QKV = torch.normal(mean=args.init_mean, std=torch.ones(
         H//TP,
         H,
-        device=get_device_string(args.device),
+        device=local_rank,
         dtype=data_type,
     )*args.init_std)
 
 attn_WO = torch.normal(mean=args.init_mean, std=torch.ones(
         H,
         H//TP,
-        device=get_device_string(args.device),
+        device=local_rank,
         dtype=data_type,
     )*args.init_std)
 
 mat_h_4h = torch.normal(mean=args.init_mean, std=torch.ones(
         4*H//TP,
         H,
-        device=get_device_string(args.device),
+        device=local_rank,
         dtype=data_type,
     )*args.init_std)
 mat_4h_h = torch.normal(mean=args.init_mean, std=torch.ones(
         H,
         4*H//TP,
-        device=get_device_string(args.device),
+        device=local_rank,
         dtype=data_type,
     )*args.init_std)
 
 n_layers = args.number_of_transformer_layers
 number_of_total_parameters = (
     (attn_W_QKV.shape[0]*attn_W_QKV.shape[1]
-    +attn_WO.shape[0]*attn_WO.shape[1]
-    +mat_h_4h.shape[0]*mat_h_4h.shape[1]
-    +mat_4h_h.shape[0]*mat_4h_h.shape[1]) 
+    + attn_WO.shape[0]*attn_WO.shape[1]
+    + mat_h_4h.shape[0]*mat_h_4h.shape[1]
+    + mat_4h_h.shape[0]*mat_4h_h.shape[1]) 
      * n_layers)
 #logging.info(f"Parameters = {number_of_total_parameters / 1e9} Billions")
 # number of iterations for the gradient synchronization loop
+# raise KeyboardInterrupt()
 
 highest_bucket_size = int(args.grad_allreduce_bucket)
 n_iter_grad_sync = math.ceil(number_of_total_parameters / highest_bucket_size)
 
 allreduce_grad = torch.normal(mean=0.0, 
-    std=torch.ones([highest_bucket_size], dtype=data_type, device=get_device_string(args.device))*0.01)
+    std=torch.ones([highest_bucket_size], dtype=data_type, device=local_rank)*0.01)
 
 if rank==0:
     logging.info("start loop")
@@ -444,6 +439,7 @@ else:
                              input=input, partial_input=partial_input, partial_interim2=partial_interim2, 
                              partial_interim4=partial_interim4, attn_W_QKV=attn_W_QKV, attn_WO=attn_WO,
                              mat_h_4h=mat_h_4h, mat_4h_h=mat_4h_h, allreduce_grad=allreduce_grad)
+# raise KeyboardInterrupt()
 
 T_dict_individual = result.T_dict_individual
 T_dict_total = result.T_dict_total
@@ -461,6 +457,7 @@ tp_allreduce_1_data_volume = (interim2.shape[0] * interim2.shape[-1] * data_type
 tp_allreduce_2_data_volume = (interim4.shape[0] * interim4.shape[-1] * data_type_multiplier)
 
 sp_allgather_data_volume = ((TP - 1) * (args.sequence_length // TP) * args.hidden_dimension * data_type_multiplier) 
+# raise KeyboardInterrupt()
 
 def format_logging_timings(text, data, key, time_multiplier=1):
     """
@@ -476,7 +473,6 @@ def format_logging_timings(text, data, key, time_multiplier=1):
         logging.info("{text} takes max. {max_time:.4f} ms,  min. {min_time:.4f} ms, avg. {avg_time:.4f} ms"
         .format(text=text, max_time=np.max(data)/time_multiplier, 
         min_time=np.min(data)/time_multiplier, avg_time=np.mean(data)/time_multiplier))
-
 
 def format_logging_flops(text, in_shape, weight_shape, layers, data, key, time_multiplier=1):
     """

@@ -1,4 +1,4 @@
-#!/bin/bash -x
+#!/bin/bash
 #PBS -l select=2
 #PBS -l place=scatter
 #PBS -l walltime=00:20:00
@@ -13,33 +13,26 @@
 
 ## Timezone US/Central
 export TZ='/usr/share/zoneinfo/US/Central'
-
-# Define a timestamp function
 timestamp() {
   date +"%Y-%m-%d %H:%M:%S" # current time
 }
-
 echo "$(timestamp): Start of the Run, after exporting TZ Central"
 
-
+module load frameworks/2024.2.1_u1
 WORK_DIR="/lus/flare/projects/Aurora_deployment/eku/ml_communications/in_context_benchmarks/llm_benchmarks"
 LOG_WRAPPER=${WORK_DIR}/log_wrapper.sh 
-
 TP_DEGREE=12
 WARMUP_ITERS=1
 NUM_ITERS=5  # Switch back to N_TIMING_LOOP?
 PRECISION="float32"
 N_LAYERS=80
+# DEVICE="cpu"  # {cpu, cuda, xpu}
+DEVICE="xpu"  # {cpu, cuda, xpu}
 # TRIAL=2
-
 # MPI and OpenMP settings
 NNODES=`wc -l < $PBS_NODEFILE`
 NRANKS_PER_NODE=12
-
-let NRANKS=${NNODES}*${NRANKS_PER_NODE}
-
-module load frameworks/2024.2.1_u1
-
+let NRANKS=NNODES*NRANKS_PER_NODE
 export CPU_AFFINITY="list:0-2,4-7,104-111:8-10,12-15,112-119:16-18,20-23,120-127:24-26,28-31,128-135:32-34,36-39,136-143:40-42,44-47,144-151:52-54,56-59,156-163:60-62,64-67,164-171:68-70,72-75,172-179:76-78,80-83,180-187:84-86,88-91,188-195:92-94,96-99,196-203"
 export HOROVOD_THREAD_AFFINITY="4,12,20,28,36,44,56,64,72,80,88,96"
 export CCL_WORKER_AFFINITY="3,11,19,27,35,43,55,63,71,79,87,95"
@@ -55,6 +48,8 @@ RUN_ID=aurora_tensor_parallel_TP${TP_DEGREE}_NO_SP_${N_LAYERS}LAYERS_${PRECISION
 echo "${RUN_ID}"
 echo "$(timestamp): Before mpiexec."
 
+  # -n $NNODES \
+  # -ppn 1 \
 MPI_ARGS="\
   --pmi=pmix \
   -n ${NRANKS} \
@@ -66,8 +61,7 @@ MPI_ARGS="\
   ${LOG_WRAPPER}
 "
 PYTHON_ARGS="\
-   \
-  -dvc "xpu" \
+  --device ${DEVICE} \
   -tp_degree=${TP_DEGREE} \
   --warmup_iterations ${WARMUP_ITERS} \
   --iterations=${NUM_ITERS} \
@@ -77,13 +71,39 @@ PYTHON_ARGS="\
   --log_directory=${WORK_DIR}/run_scripts/outdir_aurora/logs \
   --log_file=${RUN_ID}.log
 "
+if [[ $device == "cpu" ]]; then
+  PYTHON_ARGS="\
+  -s $NRANKS \
+  -d 8 \
+  -n_layers 8 \
+  $PYTHON_ARGS
+  "
+fi
 # mpiexec $MPI_ARGS \
 #   python ${WORK_DIR}/tensor_parallel_with_gradient_synchronization.py \
 #   $PYTHON_ARGS
-
 mpiexec $MPI_ARGS \
   python ${WORK_DIR}/unified_parallelism.py \
   $PYTHON_ARGS
+
+# RDZV_HOST=$(hostname)
+# RDZV_PORT=$RANDOM
+# ip link show
+# export CCL_SOCKET_IFNAME="enp0s31f6"
+# --nnodes=1
+# mpiexec $
+
+# torchrun --standalone --rdzv-backend=c10d --rdzv-endpoint="$RDZV_HOST:$RDZV_PORT" \
+# mpiexec $MPI_ARGS python3 -m torch.distributed.run \
+# mpiexec -n $NNODES -ppn 1 python3 -m torch.distributed.run \
+#   --rdzv-backend=c10d --rdzv-endpoint="$RDZV_HOST:$RDZV_PORT" \
+#   --nnodes=$NNODES --nproc-per-node=$NRANKS_PER_NODE \
+#   "${WORK_DIR}/unified_parallelism.py" \
+#   $PYTHON_ARGS
+
+# torchrun --nproc-per-node=4 \
+#   "${WORK_DIR}/unified_parallelism.py" \
+#   $PYTHON_ARGS
 
 echo "$(timestamp): Finished the workload."
 
@@ -96,7 +116,7 @@ echo "$(timestamp): Finished the workload."
 # 6. moved logging info to the end
 # 7. Added preliminary comments to modularize sections a bit. 
 
-
+# mpiexec unified_parallelism.py
 # Questions for myself:
 # How is group initialized
 # Where are the compute and comm?
