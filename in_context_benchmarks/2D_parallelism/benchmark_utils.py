@@ -8,7 +8,10 @@ import time
 import os
 import logging
 
-DEVICE = None
+
+# FIXME: 1e6 for perf_ns but what about for Event.record()?
+TIME_SCALE = 1e6  # nanoseconds
+
 
 def trace_func(func):
    def wrapper(*args, **kwargs):
@@ -21,49 +24,49 @@ def trace_func(func):
          return func(*args, **kwargs)
    return wrapper
 
-def timed(function):
-    '''
-        lambda: func(function_to_time())
-    '''
-    ## TODO: Change to record GPU Events to time without synchronizing device and Host
-    strt = sync_and_time(DEVICE)
-    res = function()
-    end = sync_and_time(DEVICE)
-    return res, end-strt
+
+def synchronize():
+    if torch.cuda.is_available():
+        return torch.cuda.synchronize()
+    if torch.xpu.is_available():
+        return torch.xpu.synchronize()
 
 @trace_func
-def sync_and_time(device):
-    if device not in ["cuda", "xpu", "cpu"]:
-        raise NotImplementedError("This method is not implemented yet.")
-    if device == "cuda":
-        torch.cuda.synchronize()
-    if device == "xpu":
-        torch.xpu.synchronize()
+def _time_without_blocking():
+    ## FIXME: check if perf_counter_ns have the same metric as Event.record()
+    if torch.cuda.is_available():
+        return torch.cuda.Event(enable_timing=True).record()
+    if torch.xpu.is_available():
+        return torch.xpu.Event(enable_timing=True).record()
     return time.perf_counter_ns()
 
-def get_device_count(device):
-    '''returns the local world size'''
-    if device == "cuda":
-        return torch.cuda.device_count()
-    elif device == "xpu":
-        return torch.xpu.device_count()
-    elif device == "cpu":
-        return int(os.environ["LOCAL_WORLD_SIZE"])
 
-# def set_device_and_dtype(local_rank, dtype):
-## TODO: also set device such that we don't have to pass dtype or device
-def set_device(local_rank):
-    global DEVICE
-    DEVICE = local_rank
+def time_and_save_to_dict(op_name, function, dict_time):
+    """
+    Excute the callback function and return time-taken without overheads
+    """
+    strt = _time_without_blocking()
+    out = function()
+    end = _time_without_blocking()
+    has_accelerator = (torch.cuda.is_available() or torch.xpu.is_available())
+    if op_name not in dict_time:
+        dict_time[op_name] = []
+    if has_accelerator:
+        dict_time[op_name].append(strt.elapsed_time(end))
+    else:
+        dict_time[op_name].append(end - strt)
+    return out
+
 
 def get_backend(device):
-    if device =="cuda":
+    if device not in ['cuda', 'xpu', 'cpu']:
+        return NotImplementedError(f'{device} not known')
+    if device == 'cuda':
         return "nccl"
-    if device == "xpu":
+    if device == 'xpu':
         return "ccl"
-    if device == "cpu":
-        return "gloo"
-    raise NotImplementedError("This method is not implemented yet.")
+    return "gloo"
+
 
 def matmul_flops(input_shape, other_shape):
     """
@@ -74,42 +77,46 @@ def matmul_flops(input_shape, other_shape):
     #Reference: https://math.stackexchange.com/questions/3512976/proof-of-of-flops-in-matrix-multiplication
     return np.prod(input_shape[:-1]) * other_shape[-1] * (2*other_shape[-2]-1)
 
-def format_logging_timings(text, data, key, time_multiplier=1, warmup_iterations=1):
-    """
-    TODO document here
-    """
-    if key is not None:
-        data[key] = data[key][warmup_iterations:]  # Extract warmup iters
-        logging.info("{text} takes max. {max_time:.4f} ms,  min. {min_time:.4f} ms, avg. {avg_time:.4f} ms"
-        .format(text=text, max_time=np.max(data[key])/time_multiplier, 
-        min_time=np.min(data[key])/time_multiplier, avg_time=np.mean(data[key])/time_multiplier))
-    else:
-        data = data[warmup_iterations:]  # Extract warmup iters
-        logging.info("{text} takes max. {max_time:.4f} ms,  min. {min_time:.4f} ms, avg. {avg_time:.4f} ms"
-        .format(text=text, max_time=np.max(data)/time_multiplier, 
-        min_time=np.min(data)/time_multiplier, avg_time=np.mean(data)/time_multiplier))
 
-def format_logging_flops(text, in_shape, weight_shape, layers, data, key, time_multiplier=1, warmup_iterations=1):
-    """
-    TODO document here
-    """
-    data[key] = data[key][warmup_iterations:]  # Extract warmup iters
-    flops = matmul_flops(in_shape, weight_shape)*layers
-    max_time=np.max(data[key])
-    min_time=np.min(data[key])
-    avg_time=np.mean(data[key])
-    tflops_min = flops/(1e12*(max_time/time_multiplier/1000))
-    tflops_max = flops/(1e12*(min_time/time_multiplier/1000))
-    tflops_avg = flops/(1e12*(avg_time/time_multiplier/1000))
-    logging.info("{text} TFLOPS max. {max:.4f},  min. {min:.4f}, avg. {avg:.4f}"
-    .format(text=text, min=tflops_min, max=tflops_max, avg=tflops_avg))
+def get_time_statistics(op_name, lst_time, warmup_iterations=1):
+    arr_unnormalized_time = np.array(lst_time[warmup_iterations:])  # Extract warmup iters
+    arr_time = arr_unnormalized_time / TIME_SCALE  
+    str_to_format = '{op_name} takes sum. {sum_time:.4f}ms, max. {max_time:.4f}ms, min. '\
+                    '{min_time:.4f}ms, avg. {avg_time:.4f}ms'
+    str_time_statistics = str_to_format.format(
+        op_name=op_name, sum_time=arr_time.sum(), max_time=arr_time.max(), 
+        min_time=arr_time.min(), avg_time=arr_time.mean()
+    )
+
+    return str_time_statistics
+
+
+def get_flop_statistics(op_name, gemm_input_shapes, lst_time, warmup_iterations=1):
+    arr_unnormalized_time = np.array(lst_time[warmup_iterations:])  # Extract warmup iters
+    arr_time = arr_unnormalized_time / TIME_SCALE 
+    tflop_count = matmul_flops(*gemm_input_shapes) / 1e12
+    # total_flops = flops * l
+    arr_tflops = tflop_count / arr_time
+    str_to_format = "{text} TFLOPS max. {max:.4f},  min. {min:.4f}, avg. {avg:.4f}"
+    str_flop_statistics = str_to_format.format(
+        text=op_name, max=arr_tflops.max(), min=arr_tflops.min(), avg=arr_tflops.mean()
+    )
+
+    return str_flop_statistics
+    
 
 def log_info_rank0(msg):
-    assert dist.is_initialized() ## TODO
+    assert dist.is_initialized()
     if dist.get_rank == 0:
         logging.info(msg)
 
-def all_gather_parameters():
-    gathered_W_qkv = torch.randn(W_qkv.shape[0]*DP, W_qkv.shape[1])
-    _, T_param_allgather_1 = timed(
-        lambda: dist.all_gather_into_tensor(gathered_W_qkv, W_qkv, group=DP_group))
+
+def print_rank0(msg):
+    assert dist.is_initialized()
+    if dist.get_rank == 0:
+        print(msg)
+
+
+def log_and_print_rank0(msg):
+    log_info_rank0(msg)
+    print_rank0(msg)
