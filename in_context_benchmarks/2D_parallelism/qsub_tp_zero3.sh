@@ -64,7 +64,7 @@ fi
 
 
 torchrun --nproc-per-node=$NRANKS \
-  "${WORK_DIR}\tp_zero3.py" \
+  "${WORK_DIR}\tp_ulysses_zero3.py" \
   $PYTHON_ARGS
 echo "$(timestamp): Finished the workload."
 
