@@ -30,7 +30,7 @@ TP_DEGREE=12
 TIMING_LOOPS=4
 PRECISION="float32"
 N_LAYERS=1
-TRIAL=4
+TRIAL=6
 
 # MPI and OpenMP settings
 NNODES=`wc -l < $PBS_NODEFILE`
@@ -76,20 +76,21 @@ export HOROVOD_THREAD_AFFINITY="4,12,20,28,36,44,56,64,72,80,88,96"
 export CCL_WORKER_AFFINITY="3,11,19,27,35,43,55,63,71,79,87,95"
 export MEM_BIND="list:2:2:2:2:2:2:3:3:3:3:3:3"
 
-export CCL_ATL_TRANSPORT=mpi
-export PALS_PMI=pmix
-export FI_PROVIDER="cxi,tcp;ofi_rxm"
+#export CCL_ATL_TRANSPORT=mpi
+#export PALS_PMI=pmix
+#export FI_PROVIDER="cxi,tcp;ofi_rxm"
 
-export CCL_KVS_MODE=mpi ## very important
-export CCL_KVS_CONNECTION_TIMEOUT=140
+#export CCL_KVS_MODE=mpi ## very important
+#export CCL_KVS_CONNECTION_TIMEOUT=140
 
 #export FI_CXI_DEFAULT_CQ_SIZE=1048576
 #export FI_CXI_RX_MATCH_MODE=hybrid
-#export FI_MR_CACHE_MONITOR=disabled
+# CACHE_MONITOR disabling is absolutely crucial for scaling beyond a single node!!
+export FI_MR_CACHE_MONITOR=disabled
 #export FI_CXI_OFLOW_BUF_SIZE=8388608
 #export FI_CXI_CQ_FILL_PERCENT=30
 
-#export CCL_LOG_LEVEL=debug
+export CCL_LOG_LEVEL=debug
 
 #echo "========= ENVIRONMENT VARIABLES ======="
 #env
