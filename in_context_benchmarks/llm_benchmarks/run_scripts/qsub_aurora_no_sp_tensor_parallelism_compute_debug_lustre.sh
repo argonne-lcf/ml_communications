@@ -30,7 +30,7 @@ TP_DEGREE=12
 TIMING_LOOPS=4
 PRECISION="float32"
 N_LAYERS=1
-TRIAL=4
+TRIAL=6
 
 # MPI and OpenMP settings
 NNODES=`wc -l < $PBS_NODEFILE`
@@ -49,22 +49,22 @@ let NRANKS=${NNODES}*${NRANKS_PER_NODE}
 #      --dst /tmp/aurora_fw_2025.0.1_u1_test_lustre-feb8.tar.gz --d
 #
 #module unload frameworks
-
+#
 #module restore
 #echo "$(timestamp): End the moving to tmp process on ${NNODES} Nodes"
 
 
-# Trying the frameworks-lustre module
+# Trying the frameworks-lustre-feb13 module
 #module load frameworks/2024.2.1_u1
 #
 module unload oneapi/eng-compiler/2024.07.30.002
 module use /opt/aurora/24.180.3/spack/unified/0.8.0/install/modulefiles/oneapi/2024.07.30.002
 module use /soft/preview/pe/24.347.0-RC2/modulefiles
 module add oneapi/release
-module use /lus/flare/projects/Aurora_deployment/datascience/software/aurora_fw_2025.0.1_u1_test_lustre-feb8/modulefiles/
+module use /lus/flare/projects/Aurora_deployment/datascience/software/aurora_fw_2025.0.1_u1_test_lustre-feb13/modulefiles/
 echo "loaded modules"
 module -t list
-module load frameworks-lustre
+module load frameworks-lustre-feb13
 echo "loaded modules"
 module -t list
 
@@ -76,7 +76,20 @@ export HOROVOD_THREAD_AFFINITY="4,12,20,28,36,44,56,64,72,80,88,96"
 export CCL_WORKER_AFFINITY="3,11,19,27,35,43,55,63,71,79,87,95"
 export MEM_BIND="list:2:2:2:2:2:2:3:3:3:3:3:3"
 
-export CCL_ATL_TRANSPORT=mpi
+#export CCL_ATL_TRANSPORT=mpi
+#export PALS_PMI=pmix
+#export FI_PROVIDER="cxi,tcp;ofi_rxm"
+
+#export CCL_KVS_MODE=mpi ## very important
+#export CCL_KVS_CONNECTION_TIMEOUT=140
+
+#export FI_CXI_DEFAULT_CQ_SIZE=1048576
+#export FI_CXI_RX_MATCH_MODE=hybrid
+# CACHE_MONITOR disabling is absolutely crucial for scaling beyond a single node!!
+export FI_MR_CACHE_MONITOR=disabled
+#export FI_CXI_OFLOW_BUF_SIZE=8388608
+#export FI_CXI_CQ_FILL_PERCENT=30
+
 export CCL_LOG_LEVEL=debug
 
 #echo "========= ENVIRONMENT VARIABLES ======="
@@ -106,7 +119,7 @@ echo "$(timestamp): Finished the workload."
 ## Clean up
 
 # Unload will only deactivate the CONDA and remove paths related to CONDA
-module unload frameworks-lustre/2025.0.5_u1-lustre-feb8
+module unload frameworks-lustre-feb13/2025.0.5_u1-lustre-feb13
 module -t list
 # restore to get back to the default state with other ad-hoc paths removed
 module restore

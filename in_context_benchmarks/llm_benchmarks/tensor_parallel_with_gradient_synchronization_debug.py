@@ -428,6 +428,7 @@ if rank == 0:
    sock                     = socket.socket()
    sock.bind(('',0))
    # master_port  = sock.getsockname()[1]
+   logging.info(f"Master Address = {master_addr}")
    master_port              = 2345
 else:
    master_addr              = None
