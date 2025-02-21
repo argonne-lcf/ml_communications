@@ -1,8 +1,11 @@
-# from mpi4py import MPI
+import os
+if os.environ.get('USE_TORCHRUN') != '1':
+    from mpi4py import MPI
+    comm = MPI.COMM_WORLD
+    comm.Barrier()
 from benchmark_utils import (
-    time_and_save_to_dict, get_backend, matmul_flops, get_time_statistics, 
-    get_flop_statistics, log_info_rank0, print_rank0, log_and_print_rank0,
-    synchronize,
+    time_and_save_to_dict, get_backend, get_time_statistics, get_flop_statistics, 
+    print_rank0, log_and_print_rank0, synchronize, create_new_stream
 )
 
 import torch
@@ -13,13 +16,15 @@ from torch import Tensor
 from torch.profiler import profile, ProfilerActivity
 import numpy as np
 
-import os
 import time
 import math
 import argparse
 import logging
-import contextlib
 from functools import partial
+
+if torch.xpu.is_available():
+    import intel_extension_for_pytorch
+    import oneccl_bindings_for_pytorch
 
 
 parser = argparse.ArgumentParser(
@@ -41,8 +46,8 @@ parser.add_argument("--micro-batch-size", type=int, default=1,
                     help='local batch size per model instance')
 parser.add_argument("-p", "--precision", type=str, default="float32",
                     help="Data type for the elements of a tensor. float32 and bfloat16 supported.", )
-parser.add_argument("-dvc", "--device", help="Device type. cuda and xpu supported.",
-                    type=str, default="cuda")
+parser.add_argument("-dvc", "--device", type=str, default="cuda",
+                    help="Device type. cuda and xpu supported.")
 ## TODO: can we make log pth single arg
 parser.add_argument("-f", "--log_file", help="Output file name",
                     type=str, default="tensor_parallel.log")
@@ -66,6 +71,17 @@ parser.add_argument('--include-flash-attention', action='store_true',
                     help='time and benchmark flash attention kernel by using F.scaled_dot_product_attention')
 args = parser.parse_args()
 
+# ## debug_mode
+# args.device = 'cpu'
+# args.n_layers = 4
+# args.sequence_length = 12
+# args.hidden_dimension = 48
+# args.head_count = 12
+# args.number_of_transformer_layers = 4
+# args.use_zero3 = True
+# args.tensor_parallel_degree = 1
+# args.data_parallel_degree = 12
+# os.environ['USE_TORCHRUN'] = '1'
 
 ## TODO: just pass-in device mesh only or will getting the attributes cause some overhead?
 def emulate_transformer_layer(
@@ -78,8 +94,6 @@ def emulate_transformer_layer(
     timed: partial,
     stream_for_zero: torch.Stream,
 ) -> Tensor:
-    
-
     r"""Emulate single transfromer layer and return the output
     
     Args:
@@ -110,8 +124,6 @@ def emulate_transformer_layer(
               lambda: dist.all_gather_into_tensor(x, loc_input, group=tp_group)
         )
     # W_qkv (GEMM) -> [s, b, 3h]
-    print(f"x.shape: {x.shape}")
-    print(f"W_qkv.shape: {W_qkv.shape}")
     x = timed('W_qkv', lambda: torch.matmul(x, W_qkv))
 
     if args.use_zero3:  # prefetch W_o
@@ -122,12 +134,12 @@ def emulate_transformer_layer(
             )
             W_o = torch.cat(W_o_lst, dim=0)
     if SPU > 1:
-        hc_sharded_x_lst = [torch.empty_like(loc_input) for _ in range(SPU)]
-        all2all_inp_lst = list(x.tensor_split(SPU, dim=hc_dim))
-        timed('ulysses all2all out',
-              lambda: dist.all_to_all(hc_sharded_x_lst, all2all_inp_lst, group=spu_group)
+        all2all_inp_lst = [y.contiguous() for y in x.tensor_split(SPU, dim=hc_dim)]
+        all2all_out_lst = [torch.empty_like(x) for x in all2all_inp_lst]
+        timed('ulysses pre-att all2all',
+              lambda: dist.all_to_all(all2all_out_lst, all2all_inp_lst, group=spu_group)
         )
-        x = torch.cat(hc_sharded_x_lst, dim=seq_dim)
+        x = torch.cat(all2all_out_lst, dim=seq_dim)
     q, k, v = x.view(S, B, hc//TP, qkv, hs).permute(1, 2, 0, 3, 4).unbind(-2)  # -> (b, hc, s, hs)
 
     # Flash Attention -> (s, b, h//TP)
@@ -140,7 +152,7 @@ def emulate_transformer_layer(
     if SPU > 1:
         seq_sharded_x_lst = [torch.empty_like(loc_input) for _ in range(SPU)]
         all2all_inp_lst = list(x.tensor_split(SPU, dim=seq_dim))
-        timed('ulysses all2all out',
+        timed('ulysses post-att all2all',
               lambda: dist.all_to_all(seq_sharded_x_lst, all2all_inp_lst, group=spu_group)
         )
         x = torch.cat(seq_sharded_x_lst, dim=seq_dim)
@@ -160,7 +172,6 @@ def emulate_transformer_layer(
         )
     elif TP > 1:
         timed('TP all-reduce 1', lambda: dist.all_reduce(x, group=tp_group))
-    
     # Skipping dropout and Norm
     
     if args.sequence_parallel_switch:
@@ -202,20 +213,20 @@ def main():
     elif args.precision == "bfloat16":
         data_type = torch.bfloat16
         data_type_multiplier = 16 ## 16 Bits
-    torch.set_default_dtype(data_type)
 
     ## Setup distributed environment
-    dist.init_process_group(backend=get_backend(args.device))
+    if os.environ.get('USE_TORCHRUN') == '1':  # TODO: make it an argument variable 
+    # instead of env variable
+        dist.init_process_group(backend=get_backend(args.device))
+    else:
+        dist.init_process_group(backend=get_backend(args.device),
+                                rank=comm.Get_rank(),
+                                world_size=comm.Get_size())
+
     rank = dist.get_rank()
     world_size = dist.get_world_size()
-    print_rank0(f"args: {args}")
-    print_rank0(f"world_size: {world_size}")
-    ## TODO: do we need to explicitly set local_rank? or is setting this to cuda or xpu enough
-    if args.device == 'cpu':
-        local_rank = 'cpu'
-    else:
-        raise NotImplementedError()
-        local_rank = os.environ["LOCAL_RANK"]
+    log_and_print_rank0(f"args: {args}")
+    log_and_print_rank0(f"world_size: {world_size}")
 
     ## Initialize logging
     if args.logging:
@@ -234,13 +245,17 @@ def main():
     SPU = args.ulysses_degree
     B = args.micro_batch_size
     hc = args.head_count
+    assert world_size % TP % SPU == 0, \
+        'Cannot infer DP as world_size is indivisible by model parallel degree'
+    DP = world_size // TP // SPU
     if TP == 1:
         log_and_print_rank0('turning off sequence parallel switch due to TP=1')
         args.sequence_parallel_switch = False  # SP builds on top of TP
+    if args.use_zero3 and (SPU == 1 and DP == 1):
+        log_and_print_rank0('turning off zero3 switch due group size of 1')
+        args.use_zero3 = False  # SP builds on top of TP
     assert not (TP > 1 and SPU > 1), 'Enabling both TP and ulysses is forbidden' 
     assert (hc % TP == 0) and (hc % SPU == 0), 'head count is indivisible by TP or ulysses'
-    assert world_size % TP % SPU == 0, 'world_size is indivisible by model parallelism'
-    DP = world_size // TP // SPU
     if TP > 1:  # TP with or without sequence parallelism
         mesh_shape = [TP, DP]
         mesh_dim_names = ['TP', 'DP']
@@ -256,29 +271,32 @@ def main():
         mesh_dim_names=mesh_dim_names
     )
 
+    ## set default device adn data type
+    torch.set_default_dtype(data_type)
+    torch.set_default_device(args.device)  ## TODO: do we need to explicitly set local_rank? or is setting this to cuda or xpu enough
+
     ## Initialize input and buffers
     S = args.sequence_length
     H = args.hidden_dimension
     qkv = 3
+    stable_std = 0.01
     # partition sequence if sequence parallelism is enabled
     if args.sequence_parallel_switch or SPU > 1:
         assert S % TP % SPU == 0, \
             'sequence length must be dividable by TP or ulysses degree, whichever one is enabled'
         ## TODO: call it local_input, or loc_x or what? 
-        loc_input = torch.randn(S//TP//SPU, B, H)
+        loc_input = torch.randn(S//TP//SPU, B, H) * stable_std
     else:
-        loc_input = torch.randn(S, B, H)
-    x = torch.empty([S, B, H], dtype=data_type, device=local_rank)
+        loc_input = torch.randn(S, B, H) * stable_std
+    x = torch.randn([S, B, H]) * stable_std
     if args.use_zero3:
         sharded_hidden_dim = H//TP//DP//SPU
     else:
         sharded_hidden_dim = H//TP
-
+        
     ## Initialize weights with stable std
     n_layers = args.number_of_transformer_layers
-    stable_std = 0.01
     W_qkv = torch.randn(H, qkv*sharded_hidden_dim) * stable_std
-    print(f"initialized sharded_W_qkv.shape: {W_qkv.shape}")
     W_o = torch.randn(sharded_hidden_dim, H) * stable_std
     W_h_4h = torch.randn(H, 4*sharded_hidden_dim) * stable_std
     W_4h_h = torch.randn(4*sharded_hidden_dim, H) * stable_std
@@ -289,14 +307,14 @@ def main():
 
     ## Initialize buckets for the gradient synchronization loop
     highest_bucket_size = args.grad_bucket_size
-    if highest_bucket_size < num_total_parameters:
+    if highest_bucket_size > num_total_parameters:
         highest_bucket_size = num_total_parameters
         log_and_print_rank0('Bucket size is too big compared to num parameters.'
                             'Adjusting bucket size to the max num parameters')
     n_iter_grad_sync = math.ceil(num_total_parameters / highest_bucket_size)
-    allreduce_grad = torch.randn(highest_bucket_size)
+    allreduce_grad = torch.randn(int(highest_bucket_size))
     if args.use_zero3:
-        scattered_grad_buffer = torch.randn(highest_bucket_size // SPU // DP)
+        scattered_grad_buffer = torch.randn(int(highest_bucket_size) // SPU // DP)
 
     ## Start profiling if enabled
     if args.trace:
@@ -317,16 +335,11 @@ def main():
     assert hc % TP == 0
 
     ## Run and time pseudo parallel transformer
-    def create_new_stream():
-        if torch.cuda.is_available():
-            return torch.cuda.stream()
-        if torch.xpu.is_available():
-            return torch.xpu.stream()
-        return contextlib.nullcontext()
     stream_for_zero = create_new_stream()
     tp_group = device_mesh['TP'].get_group() if TP > 1 else None
     spu_group = device_mesh['SPU'].get_group() if SPU > 1 else None
     dp_group = device_mesh['DP'].get_group()
+
     if SPU > 1 and args.use_zero3:
         spu_dp_group = None  # HACK: global_group
     else:
@@ -336,6 +349,7 @@ def main():
     for i in range(N_timing_loop):
         ## TODO: Time each loop?
         for l in range(n_layers):
+            print_rank0(f"At {i}th loop, running layer {l}")
             emulate_transformer_layer(
                 loc_input=loc_input,
                 x=x,
@@ -348,6 +362,7 @@ def main():
             )
             print_rank0(f"At {i}th loop, finished layer {l}")
 
+        print_rank0(f"doing grad sync of iter {i}")
         ## Grad sync  # TODO: make grad-sync async?
         for _ in range(n_iter_grad_sync):
             if args.use_zero3:
@@ -382,7 +397,7 @@ def main():
         logging.info(f"Hidden Dimension = {args.hidden_dimension}")
         logging.info(f"Number of transformer layers = {args.number_of_transformer_layers}")
         logging.info(f"Precision Type = {args.precision}")
-        logging.info(f"SP Value = {args.sequence_parallel_switch}")
+        logging.info(f"SP switch = {args.sequence_parallel_switch}")
         logging.info(f"TP Degree = {TP}") 
         logging.info("==== List of Arguments ====")
         logging.info(f"Shape of the (Q,K,V) atten. matrix = {W_qkv.shape}")
