@@ -22,11 +22,11 @@
 # }
 # echo "$(timestamp): Start of the Run, after exporting TZ Central"
 
-SCRIPT_PTH="/eagle/datascience/eku/ml_communications/in_context_benchmarks/2D_parallelism/qsub_tp_zero3_polaris.sh"
+SCRIPT_PTH="/flare/Aurora_deployment/eku/ml_communications/in_context_benchmarks/2D_parallelism/qsub_tp_zero3_aurora.sh"
 WORK_DIR=$(dirname $SCRIPT_PTH | xargs realpath)
 # LOG_WRAPPER="$WORK_DIR/log_wrapper.sh"
 NNODES=$(wc -l < $PBS_NODEFILE)
-NRANKS_PER_NODE=4
+NRANKS_PER_NODE=12
 NRANKS=$((NNODES * NRANKS_PER_NODE))
 log_fpth="$WORK_DIR/logs/unified_$(date +"%Y-%m-%d_%H-%M-%S").log"
 
@@ -34,8 +34,9 @@ MODEL_PARALLELISM_DEGREE=$NRANKS_PER_NODE
 WARMUP_ITERS=1
 NUM_ITERS=5  # Switch back to N_TIMING_LOOP?
 PRECISION="float32"
-N_LAYERS=80  # FIXME: 80
-DEVICE="cuda"  # {cpu, cuda, xpu}
+N_LAYERS=4  # FIXME: 80
+# N_LAYERS=80  # FIXME: 80
+DEVICE="xpu"  # {cpu, cuda, xpu}
 # DEVICE="cpu"  # {cpu, cuda, xpu}
 
 # export AWS_DIR=/soft/libraries/aws-ofi-nccl/v1.6.0/
@@ -81,10 +82,11 @@ DEVICE="cuda"  # {cpu, cuda, xpu}
 #     --use-zero3
 #   "
 # else
-  # -TP $MODEL_PARALLELISM_DEGREE \
+  # --use-zero3
+  # --ulysses $MODEL_PARALLELISM_DEGREE \
 PYTHON_ARGS="\
   --device ${DEVICE} \
-  --ulysses $MODEL_PARALLELISM_DEGREE \
+  -TP ${MODEL_PARALLELISM_DEGREE} \
   --sequence-parallel-switch \
   -n_layers $N_LAYERS \
   --warmup-iter ${WARMUP_ITERS} \
@@ -94,11 +96,8 @@ PYTHON_ARGS="\
   --log_fpth $log_fpth \
   --head-count 12 \
   --include-flash-attention \
-  --trace
 "
-    # -TP ${TP_DEGREE} \
-    # --ulysses ${ULYSSES_DEGREE} \
-    # --use-zero3
+  # --trace
 # fi
 
 

@@ -1,5 +1,4 @@
 import os
-# if os.environ.get('USE_TORCHRUN') != '1':
 from mpi4py import MPI
 
 from benchmark_utils import (
@@ -49,11 +48,8 @@ parser.add_argument("-p", "--precision", type=str, default="float32",
                     help="Data type for the elements of a tensor. float32 and bfloat16 supported.", )
 parser.add_argument("-dvc", "--device", type=str, default="cuda",
                     help="Device type. cuda and xpu supported.")
-## TODO: can we make log pth single arg
 parser.add_argument("-f", "--log_fpth", help="Output file name",
                     type=str, default="tensor_parallel.log")
-# parser.add_argument("-dir", "--log_directory", help="Output file path",
-#                     type=str, default="logs/")
 parser.add_argument("--logging", help="Switch logging on", action='store_true')
 parser.add_argument('--save', action='store_true', 
                     help='Save detail results in npy format. Generates huge files, use' 'with caution') ## 
@@ -112,7 +108,7 @@ def emulate_transformer_layer(
     seq_dim = 0
     hc_dim = 2
     qkv = 3
-
+    ## FIXME: to support zero3, we will need to modify the timer to use .elapsed_time() which can only be calculated after the layer has finished running (ideally at the end of the model). To do this on aurora, it requires the latest xpu version or you can just create a different version to support overlap of zero3 on polaris. 
     if args.use_zero3:  # prefetch W_qkv
         with stream_for_zero:
             W_qkv_lst = [torch.empty_like(W_qkv) for _ in range(SPU_DP)]
@@ -289,8 +285,8 @@ def main():
     torch.set_default_device(rank)  
     ## Issue fixed: we need to manually send tensor to each local_rank
     ## FIXME: 
-    # 1. Is rank and world_size local or global? 
-    # 2. How does it differ from dist.get and comm.get?
+    # 1. Is rank and world_size here local or global? 
+    # 2. does it differ from dist.get and comm.get?
 
     ## Initialize input and buffers
     S = args.sequence_length
@@ -344,7 +340,6 @@ def main():
         else:
             raise NotImplementedError()
         from torch.profiler import schedule
-        # dist.breakpoint()
         # my_schedule = schedule(wait=0,
         #                        warmup=args.warmup_iter, 
         #                        active=N_timing_loop - args.warmup_iter)
@@ -352,6 +347,7 @@ def main():
         #                        warmup=1, 
         #                        active=1)
         #                schedule=my_schedule,
+        ## TODO: fix schedule making our trace empty
         prof = profile(activities=activities, 
                        record_shapes=True)
         prof.start()
@@ -376,7 +372,7 @@ def main():
     for i in range(N_timing_loop):
         ## TODO: Time each loop?
         for l in range(n_layers):
-            log_and_print_rank0(f"At {i}th loop, running layer {l}")
+            print(f"At {i}th loop, running layer {l}")
             emulate_transformer_layer(
                 loc_input=loc_input,
                 x=x,
@@ -387,7 +383,7 @@ def main():
                 timed=timed,
                 stream_for_zero=stream_for_zero,
             )
-            log_and_print_rank0(f"At {i}th loop, finished layer {l}")
+            print(f"At {i}th loop, finished layer {l}")
 
         synchronize()
         log_and_print_rank0(f"doing grad sync of iter {i}")
