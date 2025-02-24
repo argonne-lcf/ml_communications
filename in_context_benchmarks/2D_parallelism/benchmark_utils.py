@@ -1,28 +1,27 @@
 import torch
+import torch.distributed as dist
 from torch.profiler import record_function
 import numpy as np
-import argparse
-import torch.distributed as dist
 
 import time
-import os
 import logging
+import contextlib
 
 
 # FIXME: 1e6 for perf_ns but what about for Event.record()?
 TIME_SCALE = 1e6  # nanoseconds
 
 
-def trace_func(func):
-   def wrapper(*args, **kwargs):
-      ## TODO: Understand below dunder attribute(?) and see if there is a better way
-      try:
-         function_name = func.__func__.__qualname__
-      except:
-         function_name = func.__qualname__
-      with record_function(function_name):
-         return func(*args, **kwargs)
-   return wrapper
+# def trace_func(func):
+#    def wrapper(*args, **kwargs):
+#       ## TODO: Understand below dunder attribute(?) and see if there is a better way
+#       try:
+#          function_name = func.__func__.__qualname__
+#       except:
+#          function_name = func.__qualname__
+#       with record_function(function_name):
+#          return func(*args, **kwargs)
+#    return wrapper
 
 
 def synchronize():
@@ -31,14 +30,20 @@ def synchronize():
     if torch.xpu.is_available():
         return torch.xpu.synchronize()
 
-@trace_func
+# @trace_func
 def _time_without_blocking():
-    ## FIXME: check if perf_counter_ns have the same metric as Event.record()
+    ## FIXaME: check if perf_counter_ns have the same metric as Event.record()
+    synchronize()
+    return time.perf_counter_ns()  ## FIXME elapsed time is not supported by pytorch xpu 2.3
     if torch.cuda.is_available():
-        return torch.cuda.Event(enable_timing=True).record()
-    if torch.xpu.is_available():
-        return torch.xpu.Event(enable_timing=True).record()
-    return time.perf_counter_ns()
+        event = torch.cuda.Event(enable_timing=True)
+        return event
+    elif torch.xpu.is_available():
+        event = torch.xpu.Event(enable_timing=True)
+    else:
+        return time.perf_counter_ns()
+    event.record()
+    return event
 
 
 def time_and_save_to_dict(op_name, function, dict_time):
@@ -46,9 +51,11 @@ def time_and_save_to_dict(op_name, function, dict_time):
     Excute the callback function and return time-taken without overheads
     """
     strt = _time_without_blocking()
-    out = function()
+    with record_function(op_name):
+        out = function()
     end = _time_without_blocking()
-    has_accelerator = (torch.cuda.is_available() or torch.xpu.is_available())
+    has_accelerator = False  ## FIXME elapsed time is not supported by 
+    # has_accelerator = (torch.cuda.is_available() or torch.xpu.is_available())
     if op_name not in dict_time:
         dict_time[op_name] = []
     if has_accelerator:
@@ -105,18 +112,26 @@ def get_flop_statistics(op_name, gemm_input_shapes, lst_time, warmup_iterations=
     return str_flop_statistics
     
 
-def log_info_rank0(msg):
+def log_info_rank0(msg, **kwargs):
     assert dist.is_initialized()
     if dist.get_rank == 0:
         logging.info(msg)
 
 
-def print_rank0(msg):
+def print_rank0(msg, **kwargs):
     assert dist.is_initialized()
     if dist.get_rank == 0:
         print(msg)
 
 
-def log_and_print_rank0(msg):
+def log_and_print_rank0(msg, **kwargs):
     log_info_rank0(msg)
     print_rank0(msg)
+
+
+def create_new_stream():
+    if torch.cuda.is_available():
+        return torch.cuda.stream(torch.cuda.Stream())
+    if torch.xpu.is_available():
+        return torch.xpu.stream(torch.xpu.Stream())
+    return contextlib.nullcontext()
