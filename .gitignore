@@ -22,3 +22,7 @@ in_context_benchmarks/llm_benchmarks/run_scripts/outdir/logs/results
 in_context_benchmarks/llm_benchmarks/run_scripts/errordir
 in_context_benchmarks/llm_benchmarks/run_scripts/outdir
 in_context_benchmarks/llm_benchmarks/timer_scripts
+in_context_benchmarks/2D_parallelism/run_scripts/outdir
+in_context_benchmarks/2D_parallelism/run_scripts/outdir/logs
+in_context_benchmarks/2D_parallelism/run_scripts/outdir/logs/results
+in_context_benchmarks/2D_parallelism/run_scripts/errordir
