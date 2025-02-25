@@ -1,15 +1,15 @@
 #!/bin/bash -x
-#PBS -l select=16
+#PBS -l select=8
 #PBS -l place=scatter
 #PBS -l walltime=00:10:00
-#PBS -q prod
+#PBS -q debug-scaling
 #PBS -A datascience
 #PBS -l filesystems=home:eagle
 #PBS -k doe
 #PBS -e /home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks/run_scripts/errordir
 #PBS -o /home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks/run_scripts/outdir
 #PBS -j oe
-#PBS -N TP64_R4
+#PBS -N SP32_R4
 
 ## Timezone US/Central
 export TZ='/usr/share/zoneinfo/US/Central'
@@ -24,7 +24,7 @@ echo "$(timestamp): Start of the Run, after exporting TZ Central"
 WORK_DIR=/home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks
 LOG_WRAPPER=${WORK_DIR}/log_wrapper.sh 
 
-TP_DEGREE=64
+TP_DEGREE=32
 TIMING_LOOPS=4
 #WARMUPS=4
 PRECISION="float32"
@@ -113,8 +113,8 @@ CPU_BIND=verbose,list:0-7:8-15:16-23:24-31
 
 
 
-RUN_ID=polaris_tensor_parallel_NIC_CB081624_Socket_${SOCKET}_AWS1p9p1_ENV_PHB_TP${TP_DEGREE}_NO_SP_NCCL_ALGO${ALGO}_NOWARMUPS_LAYERS${N_LAYERS}_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
-LOG_DIR=${WORK_DIR}/run_scripts/outdir/logs/tp_sweep_for_sc25 
+RUN_ID=polaris_tensor_parallel_NIC_CB081624_Socket_${SOCKET}_AWS1p9p1_ENV_PHB_TP${TP_DEGREE}_SP_NCCL_ALGO${ALGO}_NOWARMUPS_LAYERS${N_LAYERS}_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
+LOG_DIR=${WORK_DIR}/run_scripts/outdir/logs/sp_sweep_for_sc25 
 
 echo "${RUN_ID}"
 
@@ -122,7 +122,7 @@ echo "$(timestamp): Before mpiexec."
 
 mpiexec -n ${NRANKS} -ppn ${NRANKS_PER_NODE} -l --line-buffer --cpu-bind ${CPU_BIND} \
 python ${WORK_DIR}/tensor_parallel_with_gradient_synchronization_debug.py -n_layers ${N_LAYERS} \
--tp_degree=${TP_DEGREE} --barrier --iterations=${TIMING_LOOPS} --precision ${PRECISION} \
+-tp_degree=${TP_DEGREE} -sp_switch --barrier --iterations=${TIMING_LOOPS} --precision ${PRECISION} \
 --logging --log_directory=${LOG_DIR} --log_file=${RUN_ID} 
 
 echo "$(timestamp): Finished the workload."
