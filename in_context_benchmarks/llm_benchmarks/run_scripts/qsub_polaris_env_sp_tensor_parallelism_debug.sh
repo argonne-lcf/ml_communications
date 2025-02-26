@@ -1,15 +1,15 @@
 #!/bin/bash -x
-#PBS -l select=8
+#PBS -l select=12
 #PBS -l place=scatter
 #PBS -l walltime=00:10:00
-#PBS -q debug-scaling
+#PBS -q prod
 #PBS -A datascience
 #PBS -l filesystems=home:eagle
 #PBS -k doe
 #PBS -e /home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks/run_scripts/errordir
 #PBS -o /home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks/run_scripts/outdir
 #PBS -j oe
-#PBS -N SP32_R4
+#PBS -N SP48_R4
 
 ## Timezone US/Central
 export TZ='/usr/share/zoneinfo/US/Central'
@@ -24,7 +24,7 @@ echo "$(timestamp): Start of the Run, after exporting TZ Central"
 WORK_DIR=/home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks
 LOG_WRAPPER=${WORK_DIR}/log_wrapper.sh 
 
-TP_DEGREE=32
+TP_DEGREE=48
 TIMING_LOOPS=4
 #WARMUPS=4
 PRECISION="float32"
