@@ -1,15 +1,15 @@
 #!/bin/bash -x
-#PBS -l select=8
+#PBS -l select=1
 #PBS -l place=scatter
 #PBS -l walltime=00:20:00
-#PBS -q debug-scaling
+#PBS -q debug
 #PBS -A datascience
 #PBS -l filesystems=home:flare
 #PBS -k doe
 #PBS -e /home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks/run_scripts/errordir_aurora
 #PBS -o /home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks/run_scripts/outdir_aurora
 #PBS -j oe
-#PBS -N TP96_R12
+#PBS -N TP12_R12
 
 ## Timezone US/Central
 export TZ='/usr/share/zoneinfo/US/Central'
@@ -24,11 +24,11 @@ echo "$(timestamp): Start of the Run, after exporting TZ Central"
 WORK_DIR=/home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks
 LOG_WRAPPER=${WORK_DIR}/log_wrapper.sh 
 
-TP_DEGREE=96
+TP_DEGREE=12
 #WARMUPS=1
 TIMING_LOOPS=4
 PRECISION="float32"
-N_LAYERS=80
+N_LAYERS=1
 TRIAL=1
 
 # MPI and OpenMP settings
@@ -103,6 +103,6 @@ echo "$(timestamp): Before mpiexec."
 mpiexec --pmi=pmix -n ${NRANKS} -ppn ${NRANKS_PER_NODE} -l --line-buffer --cpu-bind ${CPU_AFFINITY} --mem-bind ${MEM_BIND} \
 ${LOG_WRAPPER} python ${WORK_DIR}/tensor_parallel_with_gradient_synchronization_debug.py -dvc "xpu" \
 -tp_degree=${TP_DEGREE}  --barrier --iterations=${TIMING_LOOPS} --precision ${PRECISION} -n_layers ${N_LAYERS} \
---logging --log_directory=${WORK_DIR}/run_scripts/outdir_aurora/logs/tp_sweep_for_sc25 --log_file=${RUN_ID}.log
+--logging --log_directory=${WORK_DIR}/run_scripts/outdir_aurora/logs/flops --log_file=${RUN_ID}.log
 
 echo "$(timestamp): Finished the workload."
