@@ -29,7 +29,7 @@ parser.add_argument("-wit", "--warmup_iterations", help="number of warmup iterat
                     type=int, default=2)
 
 parser.add_argument("-bucket", "--grad_allreduce_bucket", help="The largest bucket of message passed to do the allreduce over the data parallel groups (in number of elements in a message).",
-                    type=int, default=5e8)
+                    type=float, default=5e8)
 
 parser.add_argument("-dp_switch", "--data_parallel_switch", help="If TRUE, calculates data parallelism degree based of tp_degree",
                     type=bool, default=True)
@@ -507,7 +507,7 @@ number_of_total_parameters = ((attn_W_QKV.shape[0]*attn_W_QKV.shape[1] + attn_WO
 
 # number of iterations for the gradient synchronization loop
 
-highest_bucket_size = int(args.grad_allreduce_bucket)
+highest_bucket_size = int(float(args.grad_allreduce_bucket))
 n_iter_grad_sync = math.ceil(number_of_total_parameters / highest_bucket_size)
 
 allreduce_grad = torch.normal(mean=0.0, std=torch.ones([highest_bucket_size], dtype=data_type, device=get_device_string(args.device))*0.01)
