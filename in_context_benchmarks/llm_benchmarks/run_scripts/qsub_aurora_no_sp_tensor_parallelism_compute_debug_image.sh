@@ -28,7 +28,7 @@ TP_DEGREE=12
 #WARMUPS=1
 TIMING_LOOPS=4
 PRECISION="bfloat16"
-N_LAYERS=1
+N_LAYERS=80
 ## Special flag for deterministic input of torch ones. The defaults is 
 # torch.normal with std_dev 0.01 around mean 0.00
 IN_TYPE="random"
@@ -104,10 +104,18 @@ echo "========= CCL VARIABLES =============="
 printenv | grep "CCL"
 echo "========= CCL VARIABLES =============="
 
-## RUN ID for PPN=6 setup, Asymmetric GPU placement
-#RUN_ID=aurora_tensor_parallel_CB0816245260_ZED012367_TP${TP_DEGREE}_NO_SP_LAYERS${N_LAYERS}_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
-## RUN ID for R8 setup, NIC balanced case
-#RUN_ID=aurora_tensor_parallel_CB08162452606876_ZED01236789_TP${TP_DEGREE}_NO_SP_LAYERS${N_LAYERS}_TIMING_LOOPS${TIMING_LOOPS}_${PRECISION}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
+## RUN ID for PPN=2
+# RUN_ID=aurora_tensor_parallel_CB08_ZE02_TP${TP_DEGREE}_NO_SP_L${N_LAYERS}_TL${TIMING_LOOPS}_${PRECISION}_${IN_TYPE}_ELEM_${BUCKET}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
+
+## RUN ID for PPN=4
+#RUN_ID=aurora_tensor_parallel_CB081624_ZE0123_TP${TP_DEGREE}_NO_SP_L${N_LAYERS}_TL${TIMING_LOOPS}_${PRECISION}_${IN_TYPE}_ELEM_${BUCKET}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
+
+## RUN ID for PPN=6, Asymmetric GPU placement
+#RUN_ID=aurora_tensor_parallel_CB0816245260_ZE012367_TP${TP_DEGREE}_NO_SP_L${N_LAYERS}_TL${TIMING_LOOPS}_${PRECISION}_${IN_TYPE}_ELEM_${BUCKET}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
+
+## RUN ID for PPN=8, NIC balanced case
+#RUN_ID=aurora_tensor_parallel_CB08162452606876_ZE01236789_TP${TP_DEGREE}_NO_SP_L${N_LAYERS}_TL${TIMING_LOOPS}_${PRECISION}_${IN_TYPE}_ELEM_${BUCKET}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
+
 ## RUN ID for R12 setup, Regular, NIC imbalanced case
 RUN_ID=aurora_tensor_parallel_TP${TP_DEGREE}_NO_SP_L${N_LAYERS}_TL${TIMING_LOOPS}_${PRECISION}_${IN_TYPE}_ELEM_${BUCKET}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
 
@@ -121,6 +129,6 @@ mpiexec --pmi=pmix -n ${NRANKS} -ppn ${NRANKS_PER_NODE} -l --line-buffer --cpu-b
 ${LOG_WRAPPER} python ${WORK_DIR}/tensor_parallel_with_gradient_synchronization_debug.py -dvc "xpu" \
 -tp_degree=${TP_DEGREE}  --barrier --iterations=${TIMING_LOOPS} --precision ${PRECISION} -n_layers ${N_LAYERS} \
 -bucket ${BUCKET} \
---logging --log_directory=${WORK_DIR}/run_scripts/outdir_aurora/logs/scratch_logs --log_file=${RUN_ID}.log
+--logging --log_directory=${WORK_DIR}/run_scripts/outdir_aurora/logs/dp_sweep_for_sc25/dp_agpt_70B --log_file=${RUN_ID}.log
 
 echo "$(timestamp): Finished the workload."
