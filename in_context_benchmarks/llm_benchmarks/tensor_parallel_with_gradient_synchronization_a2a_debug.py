@@ -170,6 +170,7 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
                 start = time.perf_counter_ns()
                 usp_interim1 = torch.matmul(partial_input, attn_W_QKV.t())
                 synchronize(args.device)
+                end = time.perf_counter_ns()
                 if warmup:
                     T_dict_individual["T_USP_QKV"][m][i] = 0.0
                     t_usp_qkv = 0.0
@@ -194,8 +195,8 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
                     group=tp_group)
                 synchronize(args.device)
                 end=time.perf_counter_ns()
-                logging.info(f"USP_interim1_shape = {usp_interim1.shape}")
-                logging.info(f"length of USP_interim1_shape = {len(usp_interim1.shape)}")
+                #logging.info(f"USP_interim1_shape = {usp_interim1.shape}")
+                #logging.info(f"length of USP_interim1_shape = {len(usp_interim1.shape)}")
                 if warmup:
                     T_dict_individual["T_all2all_2"] = 0.0
                     t_a2a_2 = 0.0
@@ -204,6 +205,7 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
                     t_a2a_2 += (end - start)
                 start = time.perf_counter_ns()
                 usp_interim2 = torch.matmul(usp_interim1, attn_WO.t())
+                synchronize(args.device)
                 end = time.perf_counter_ns()
                 if warmup:
                     T_dict_individual["T_USP_WO"] = 0.0
@@ -213,6 +215,7 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
                     t_usp_WO += (end - start)
                 start = time.perf_counter_ns()
                 usp_interim3 = torch.matmul(usp_interim2, mat_h_4h.t())
+                synchronize(args.device)
                 end = time.perf_counter_ns()
                 if warmup:
                     T_dict_individual["T_USP_H_4H"] = 0.0
@@ -222,13 +225,14 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
                     t_usp_h_4h += (end - start)
                 start = time.perf_counter_ns()
                 usp_interim4 = torch.matmul(usp_interim3, mat_4h_h.t())
+                synchronize(args.device)
                 end = time.perf_counter_ns()
                 if warmup:
                     T_dict_individual["T_USP_4H_H"] = 0.0
-                    t_usp_h_4h = 0.0
+                    t_usp_4h_h = 0.0
                 else:
                     T_dict_individual["T_USP_4H_H"] = (end - start)
-                    t_usp_h_4h += (end - start)
+                    t_usp_4h_h += (end - start)
             if SP:
                 start = time.perf_counter_ns()
                 torch.distributed.all_gather_into_tensor(
@@ -846,7 +850,7 @@ usp_interim4 = result.usp_interim4
 usp_interim3 = result.usp_interim3
 usp_interim2 = result.usp_interim2
 usp_interim1 = result.usp_interim1
-logging.info("USP_interim_1 Shape from results = {result.usp_interim1.shape}")
+logging.info(f"USP_interim_1 Shape from results = {result.usp_interim1.shape}")
 
 
 #tp_allreduce_data_volume = (args.sequence_length * args.hidden_dimension * data_type_multiplier)
@@ -877,13 +881,13 @@ def format_logging_flops(text, in_shape, weight_shape, layers, data, key, time_m
     TODO document here
     """
     flops = matmul_flops(in_shape, weight_shape)*layers
-    logging.info("text, flops = {flops}")
+    #logging.info(f"{text}, flops = {flops}")
     max_time=np.max(data[key])
-    logging.info("text, max_time = {max_time}")
+    #logging.info(f"{text}, max_time = {max_time}")
     min_time=np.min(data[key])
-    logging.info("text, min_time = {min_time}")
+    #logging.info(f"{text}, min_time = {min_time}")
     avg_time=np.mean(data[key])
-    logging.info("text, avg_time = {avg_time}")
+    #logging.info(f"{text}, avg_time = {avg_time}")
     tflops_min = flops/(1e12*(max_time/time_multiplier/1000))
     tflops_max = flops/(1e12*(min_time/time_multiplier/1000))
     tflops_avg = flops/(1e12*(avg_time/time_multiplier/1000))
@@ -1088,6 +1092,7 @@ logging.info(f"Second reduce scatter total times from timing loop = {T_dict_tota
 logging.info(f"Second allreduce total times from timing loop = {T_dict_total['T_allreduce_2']} ms")
 logging.info(f"Grad Sync Total times from timing loop = {T_dict_total['T_grad_sync']} ms")
 logging.info(f"TP Sync times from timing loop = {T_dict_total['T_tp_sync']} ms")
+logging.info(f"USP Sync times from timing loop = {T_dict_total['T_usp_sync']} ms")
 logging.info(f"DP Sync Barrier at the beginning times from timing loop = {T_dict_total['T_dp_sync_begin']} ms")
 logging.info(f"DP Sync Barrier at the end times from timing loop = {T_dict_total['T_dp_sync_end']} ms")
 logging.info(f"Timing loop times = {T_dict_total['T_timing_loop']}")
