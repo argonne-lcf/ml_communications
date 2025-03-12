@@ -40,7 +40,7 @@ parser.add_argument("-tp_degree", "--tensor_parallel_degree", help="Tensor Paral
 
 parser.add_argument("-sp_switch", "--sequence_parallel_switch", help="Switch sequence parallelism on or off", action='store_true')
 
-parser.add_argument("-usp_switch", "--ulysses_sequence_parallel_switch", help="Switch Ulysses parallelism on or off", action='store_true')
+parser.add_argument("-ulysses_enable", "--ulysses_sequence_parallel_switch", help="Switch Ulysses parallelism on or off", action='store_true')
 
 parser.add_argument("-n_layers", "--number_of_transformer_layers", help="Number of transformer layers", type=int, default=80)
 
@@ -105,15 +105,15 @@ elif args.precision == "bfloat16":
 def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync, 
                     input, partial_input, partial_interim2, 
                     partial_interim4, attn_W_QKV, attn_WO, 
-                    mat_h_4h, mat_4h_h, allreduce_grad, global_context_usp,
+                    mat_h_4h, mat_4h_h, allreduce_grad, global_context_ulss,
                     warmup=False):
     # Define how many variables you want
     operations = ["allgather_1", "QKV", "WO", "reduce_scatter_1",
                   "allreduce_1", "allgather_2", "H_4H", "4H_H", "reduce_scatter_2",
-                  "USP_QKV", "USP_WO","USP_H_4H", "USP_4H_H",
+                  "ulss_QKV", "ulss_WO","ulss_H_4H", "ulss_4H_H",
                   "all2all_1", "all2all_2", "allreduce_2", "grad_sync", 
                   "timing_loop", "tp_sync", "dp_sync_begin", "dp_sync_end", 
-                  "usp_sync"]
+                  "ulss_sync"]
 
     # Initialize the variables using a dictionary
     T_dict_individual = {f'T_{operation}': np.zeros((N_timing_loop, n_layers)) for operation in operations[:-5]}
@@ -124,8 +124,8 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
                                        ["T_dict_individual", "T_dict_total",
                                         "T_grad_sync_individual", "interim1", 
                                         "interim2", "interim3", "interim4",
-                                        "usp_interim1", "usp_interim2", 
-                                        "usp_interim3", "usp_interim4",
+                                        "ulss_interim1", "ulss_interim2", 
+                                        "ulss_interim3", "ulss_interim4",
                                         "allreduce_grad"])
  
     #N_timing_loop = args.number_of_timing_loops 
@@ -143,10 +143,10 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
         t_rs_2 = 0.0 # dummy variable for timing the second reduce scatter
         t_ardc_2 = 0.0 # dummy variable for timing the second allreduce
         t_grad = 0.0 # dummy variable for timing the gradient sync. allreduce
-        t_usp_qkv = 0.0 # dummy variable for USP QKV matrix multiplication
-        t_usp_WO = 0.0 # dummy variable for USP WO matrix multiplication
-        t_usp_h_4h = 0.0
-        t_usp_4h_h = 0.0
+        t_ulss_qkv = 0.0 # dummy variable for ulss QKV matrix multiplication
+        t_ulss_WO = 0.0 # dummy variable for ulss WO matrix multiplication
+        t_ulss_h_4h = 0.0
+        t_ulss_4h_h = 0.0
         t_a2a_1 = 0.0
         t_a2a_2 = 0.0
         timing_loop_time = 0.0
@@ -160,26 +160,26 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
                 synchronize(args.device)
             end = time.perf_counter_ns()
             T_dict_total["T_tp_sync"][m] = ((end - start) / 1e6)
-            if USP:
-                T_dict_total["T_usp_sync"][m] = ((end - start) / 1e6)
+            if ULSS:
+                T_dict_total["T_ulss_sync"][m] = ((end - start) / 1e6)
         else:
             pass
         for i in range(n_layers):
             #start = time.perf_counter_ns() ## Timer start for the very first operation
-            if USP:
+            if ULSS:
                 start = time.perf_counter_ns()
-                usp_interim1 = torch.matmul(partial_input, attn_W_QKV.t())
+                ulss_interim1 = torch.matmul(partial_input, attn_W_QKV.t())
                 synchronize(args.device)
                 end = time.perf_counter_ns()
                 if warmup:
-                    T_dict_individual["T_USP_QKV"][m][i] = 0.0
-                    t_usp_qkv = 0.0
+                    T_dict_individual["T_ulss_QKV"][m][i] = 0.0
+                    t_ulss_qkv = 0.0
                 else:
-                    T_dict_individual["T_USP_QKV"][m][i] = (end - start)
-                    t_usp_qkv += (end-start)
+                    T_dict_individual["T_ulss_QKV"][m][i] = (end - start)
+                    t_ulss_qkv += (end-start)
                 start = time.perf_counter_ns()
                 torch.distributed.all_to_all_single(
-                    global_context_usp.reshape([S, M, H//TP]), usp_interim1, 
+                    global_context_ulss.reshape([S, M, H//TP]), ulss_interim1, 
                     group=tp_group)
                 synchronize(args.device)
                 end = time.perf_counter_ns()
@@ -191,12 +191,12 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
                     t_a2a_1 += (end - start)
                 start = time.perf_counter_ns()
                 torch.distributed.all_to_all_single(
-                    usp_interim1.reshape([S//TP, M, H]), global_context_usp,
+                    ulss_interim1.reshape([S//TP, M, H]), global_context_ulss,
                     group=tp_group)
                 synchronize(args.device)
                 end=time.perf_counter_ns()
-                #logging.info(f"USP_interim1_shape = {usp_interim1.shape}")
-                #logging.info(f"length of USP_interim1_shape = {len(usp_interim1.shape)}")
+                #logging.info(f"ulss_interim1_shape = {ulss_interim1.shape}")
+                #logging.info(f"length of ulss_interim1_shape = {len(ulss_interim1.shape)}")
                 if warmup:
                     T_dict_individual["T_all2all_2"] = 0.0
                     t_a2a_2 = 0.0
@@ -204,35 +204,37 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
                     T_dict_individual["T_all2all_2"] = (end - start)
                     t_a2a_2 += (end - start)
                 start = time.perf_counter_ns()
-                usp_interim2 = torch.matmul(usp_interim1, attn_WO.t())
+                ulss_interim2 = torch.matmul(ulss_interim1, attn_WO.t())
                 synchronize(args.device)
                 end = time.perf_counter_ns()
                 if warmup:
-                    T_dict_individual["T_USP_WO"] = 0.0
-                    t_usp_WO = 0.0
+                    T_dict_individual["T_ulss_WO"] = 0.0
+                    t_ulss_WO = 0.0
                 else:
-                    T_dict_individual["T_USP_WO"] = (end - start)
-                    t_usp_WO += (end - start)
-                start = time.perf_counter_ns()
-                usp_interim3 = torch.matmul(usp_interim2, mat_h_4h.t())
+                    T_dict_individual["T_ulss_WO"] = (end - start)
+                    t_ulss_WO += (end - start)
+                #start = time.perf_counter_ns()
+                start = end
+                ulss_interim3 = torch.matmul(ulss_interim2, mat_h_4h.t())
                 synchronize(args.device)
                 end = time.perf_counter_ns()
                 if warmup:
-                    T_dict_individual["T_USP_H_4H"] = 0.0
-                    t_usp_h_4h = 0.0
+                    T_dict_individual["T_ulss_H_4H"] = 0.0
+                    t_ulss_h_4h = 0.0
                 else:
-                    T_dict_individual["T_USP_H_4H"] = (end - start)
-                    t_usp_h_4h += (end - start)
-                start = time.perf_counter_ns()
-                usp_interim4 = torch.matmul(usp_interim3, mat_4h_h.t())
+                    T_dict_individual["T_ulss_H_4H"] = (end - start)
+                    t_ulss_h_4h += (end - start)
+                #start = time.perf_counter_ns()
+                start = end
+                ulss_interim4 = torch.matmul(ulss_interim3, mat_4h_h.t())
                 synchronize(args.device)
                 end = time.perf_counter_ns()
                 if warmup:
-                    T_dict_individual["T_USP_4H_H"] = 0.0
-                    t_usp_4h_h = 0.0
+                    T_dict_individual["T_ulss_4H_H"] = 0.0
+                    t_ulss_4h_h = 0.0
                 else:
-                    T_dict_individual["T_USP_4H_H"] = (end - start)
-                    t_usp_4h_h += (end - start)
+                    T_dict_individual["T_ulss_4H_H"] = (end - start)
+                    t_ulss_4h_h += (end - start)
             if SP:
                 start = time.perf_counter_ns()
                 torch.distributed.all_gather_into_tensor(
@@ -248,34 +250,47 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
                 else:
                     T_dict_individual["T_allgather_1"][m][i] = (end-start)
                     t_ag_1 += end - start
-            start = time.perf_counter_ns()
-            #if rank == 0:
-            #logging.info(f"Input Shape = {input.shape}")
-            interim1 = torch.matmul(input, attn_W_QKV.t())
-            #interim1 = interim1_proxy
-            #if rank == 0:
-            #logging.info(f"Interim 1 Shape = {interim1.shape}")
-            synchronize(args.device)
-            end = time.perf_counter_ns()
-            if warmup:
+                #start = time.perf_counter_ns()
+                #if rank == 0:
+                #logging.info(f"Input Shape = {input.shape}")
+            if ULSS:
+                interim1 = interim1_proxy
                 T_dict_individual["T_QKV"][m][i] = 0.0
                 t_qkv = 0.0
             else:
-                T_dict_individual["T_QKV"][m][i] = (end - start)
-                t_qkv += end-start
-            start = end
-            interim2 = torch.matmul(interim1, attn_WO.t())
-            #interim2 = interim2_proxy
-            #if rank == 0:
-            #logging.info(f"Interim 2 Shape = {interim2.shape}")
-            synchronize(args.device)
-            end = time.perf_counter_ns()
-            if warmup:
+                ulss_interim1 = interim1_proxy ## This is a hack
+                start = time.perf_counter_ns()
+                interim1 = torch.matmul(input, attn_W_QKV.t())
+                #interim1 = interim1_proxy
+                #if rank == 0:
+                #logging.info(f"Interim 1 Shape = {interim1.shape}")
+                synchronize(args.device)
+                end = time.perf_counter_ns()
+                if warmup:
+                    T_dict_individual["T_QKV"][m][i] = 0.0
+                    t_qkv = 0.0
+                else:
+                    T_dict_individual["T_QKV"][m][i] = (end - start)
+                    t_qkv += end-start
+                start = end
+            if ULSS:
+                interim2 = interim2_proxy
                 T_dict_individual["T_WO"][m][i] = 0.0
                 t_WO = 0.0 
             else:
-                T_dict_individual["T_WO"][m][i] = (end - start)
-                t_WO += end-start
+                ulss_interim2 = interim2_proxy ## This is a hack
+                interim2 = torch.matmul(interim1, attn_WO.t())
+                #interim2 = interim2_proxy
+                #if rank == 0:
+                #logging.info(f"Interim 2 Shape = {interim2.shape}")
+                synchronize(args.device)
+                end = time.perf_counter_ns()
+                if warmup:
+                    T_dict_individual["T_WO"][m][i] = 0.0
+                    t_WO = 0.0 
+                else:
+                    T_dict_individual["T_WO"][m][i] = (end - start)
+                    t_WO += end-start
             start = time.perf_counter_ns()
             if SP:
                 torch.distributed.reduce_scatter_tensor(
@@ -290,21 +305,26 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
                     T_dict_individual["T_reduce_scatter_1"][m][i] = (end - start)
                     t_rs_1 += end-start
             else:
-                start = time.perf_counter_ns()
-                #logging.info("Doing ALLREDUCE now")
-                torch.distributed.all_reduce(
-                    interim2, group=tp_group
-                )
-                synchronize(args.device)
-                end = time.perf_counter_ns()
-                #if rank == 0:
-                #    logging.info(f"Iter {m}, layer {i}, allreduce buffer = {interim2.shape}")
-                if warmup:
+                if ULSS:
+                    interim2 = interim2_proxy
                     T_dict_individual["T_allreduce_1"][m][i] = 0.0
                     t_ardc_1 = 0.0
                 else:
-                    T_dict_individual["T_allreduce_1"][m][i] = (end - start)
-                    t_ardc_1 += end-start
+                    start = time.perf_counter_ns()
+                    #logging.info("Doing ALLREDUCE now")
+                    torch.distributed.all_reduce(
+                        interim2, group=tp_group
+                    )
+                    synchronize(args.device)
+                    end = time.perf_counter_ns()
+                    #if rank == 0:
+                    #    logging.info(f"Iter {m}, layer {i}, allreduce buffer = {interim2.shape}")
+                    if warmup:
+                        T_dict_individual["T_allreduce_1"][m][i] = 0.0
+                        t_ardc_1 = 0.0
+                    else:
+                        T_dict_individual["T_allreduce_1"][m][i] = (end - start)
+                        t_ardc_1 += end-start
             if SP:
                 start = time.perf_counter_ns()
                 torch.distributed.all_gather_into_tensor(
@@ -319,31 +339,43 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
                     T_dict_individual["T_allgather_2"][m][i] = (end - start)
                     t_ag_2 += end-start
             start = time.perf_counter_ns()
-            interim3 = torch.matmul(interim2, mat_h_4h.t())
-            #interim3 = interim3_proxy
-            #if rank == 0:
-            #logging.info(f"Interim 3 Shape = {interim3.shape}")
-            synchronize(args.device)
-            end = time.perf_counter_ns()
-            if warmup:
+            if ULSS:
+                interim3 = interim3_proxy
                 T_dict_individual["T_H_4H"][m][i] = 0.0
                 t_h_4h = 0.0
             else:
-                T_dict_individual["T_H_4H"][m][i] = (end - start)
-                t_h_4h += end-start
-            start = end
-            interim4 = torch.matmul(interim3, mat_4h_h.t())
-            #interim4 = interim4_proxy
-            #if rank == 0:
-            #logging.info(f"Interim 4 Shape = {interim4.shape}")
-            synchronize(args.device)
-            end = time.perf_counter_ns()
-            if warmup:
+                ulss_interim3 = interim3_proxy ## This is a hack
+                interim3 = torch.matmul(interim2, mat_h_4h.t())
+                #interim3 = interim3_proxy
+                #if rank == 0:
+                #logging.info(f"Interim 3 Shape = {interim3.shape}")
+                synchronize(args.device)
+                end = time.perf_counter_ns()
+                if warmup:
+                    T_dict_individual["T_H_4H"][m][i] = 0.0
+                    t_h_4h = 0.0
+                else:
+                    T_dict_individual["T_H_4H"][m][i] = (end - start)
+                    t_h_4h += end-start
+                start = end
+            if ULSS:
+                interim4 = interim4_proxy
                 T_dict_individual["T_4H_H"][m][i] = 0.0
                 t_4h_h = 0.0
             else:
-                T_dict_individual["T_4H_H"][m][i] = (end - start)
-                t_4h_h += end-start
+                ulss_interim4 = interim4_proxy ## This is a hack
+                interim4 = torch.matmul(interim3, mat_4h_h.t())
+                #interim4 = interim4_proxy
+                #if rank == 0:
+                #logging.info(f"Interim 4 Shape = {interim4.shape}")
+                synchronize(args.device)
+                end = time.perf_counter_ns()
+                if warmup:
+                    T_dict_individual["T_4H_H"][m][i] = 0.0
+                    t_4h_h = 0.0
+                else:
+                    T_dict_individual["T_4H_H"][m][i] = (end - start)
+                    t_4h_h += end-start
             #
             if SP:
                 start = time.perf_counter_ns()
@@ -360,18 +392,24 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
                     T_dict_individual["T_reduce_scatter_2"][m][i] = (end - start)
                     t_rs_2 += end-start
             else:
-                start = time.perf_counter_ns()
-                torch.distributed.all_reduce(
-                    interim4, group=tp_group
-                )
-                synchronize(args.device)
-                end = time.perf_counter_ns()
-                if warmup:
+                if ULSS:
+                    interim4 = interim4_proxy
                     T_dict_individual["T_allreduce_2"][m][i] = 0.0
                     t_ardc_2 = 0.0
                 else:
-                    T_dict_individual["T_allreduce_2"][m][i] = (end - start)
-                    t_ardc_2 += end-start
+                    start = time.perf_counter_ns()
+                    torch.distributed.all_reduce(
+                        interim4, group=tp_group
+                    )
+                    synchronize(args.device)
+                    end = time.perf_counter_ns()
+                    if warmup:
+                        T_dict_individual["T_allreduce_2"][m][i] = 0.0
+                        t_ardc_2 = 0.0
+                    else:
+                        T_dict_individual["T_allreduce_2"][m][i] = (end - start)
+                        t_ardc_2 += end-start
+                        synchronize(args.device)
         synchronize(args.device)
         if args.no_grad_sync:
             pass
@@ -425,10 +463,10 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
         T_dict_total["T_4H_H"][m] = (t_4h_h / 1e6 )
         T_dict_total["T_reduce_scatter_2"][m] = (t_rs_2 / 1e6 )
         T_dict_total["T_allreduce_2"][m] = (t_ardc_2 / 1e6 )
-        T_dict_total["T_USP_QKV"][m] = (t_usp_qkv / 1e6 )
-        T_dict_total["T_USP_WO"][m] = (t_usp_WO / 1e6 )
-        T_dict_total["T_USP_H_4H"][m] = (t_usp_h_4h / 1e6 )
-        T_dict_total["T_USP_4H_H"][m] = (t_usp_4h_h / 1e6 )
+        T_dict_total["T_ulss_QKV"][m] = (t_ulss_qkv / 1e6 )
+        T_dict_total["T_ulss_WO"][m] = (t_ulss_WO / 1e6 )
+        T_dict_total["T_ulss_H_4H"][m] = (t_ulss_h_4h / 1e6 )
+        T_dict_total["T_ulss_4H_H"][m] = (t_ulss_4h_h / 1e6 )
         T_dict_total["T_all2all_1"][m] = (t_a2a_1 / 1e6 )
         T_dict_total["T_all2all_2"][m] = (t_a2a_2 / 1e6 )
         timing_loop_end_time=time.perf_counter_ns()
@@ -437,7 +475,7 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
         timing_loop_start_time = timing_loop_end_time
     #return T_dict_individual, T_dict_total, T_grad_sync_individual
     return TensorParallelResults(T_dict_individual, T_dict_total, T_grad_sync_individual,
-                                 usp_interim1, usp_interim2, usp_interim3, usp_interim4,
+                                 ulss_interim1, ulss_interim2, ulss_interim3, ulss_interim4,
                                  interim1, interim2, interim3, interim4, allreduce_grad)
 
 rank = int(MPI.COMM_WORLD.Get_rank())
@@ -653,7 +691,7 @@ H = args.hidden_dimension #9216 #9216 hidden dimension
 M = 1
 all_gather_buffer = torch.zeros([S, M, H], dtype=data_type, device=get_device_string(args.device))
 SP=args.sequence_parallel_switch
-USP=args.ulysses_sequence_parallel_switch
+ULSS=args.ulysses_sequence_parallel_switch
 
 partial_input = torch.normal(mean=args.init_mean, std=torch.ones([S//TP, M, H], dtype=data_type, device=get_device_string(args.device))*args.init_std)
 input = torch.normal(mean=args.init_mean, std=torch.ones([S, M, H], dtype=data_type, device=get_device_string(args.device))*args.init_std)
@@ -663,7 +701,7 @@ if args.torch_ones:
 partial_interim2 = torch.zeros([S//TP, M, H], dtype=data_type, device=get_device_string(args.device))
 partial_interim4 = torch.zeros([S//TP, M, H], dtype=data_type, device=get_device_string(args.device))
 
-global_context_usp = torch.zeros([S, M, H//TP], dtype=data_type, device=get_device_string(args.device))
+global_context_ulss = torch.zeros([S, M, H//TP], dtype=data_type, device=get_device_string(args.device))
 
 interim1_proxy = torch.ones([S, M, H//TP], dtype=data_type, device=get_device_string(args.device))
 interim2_proxy = torch.ones([S, M, H], dtype=data_type, device=get_device_string(args.device))
@@ -689,7 +727,7 @@ attn_W_QKV = torch.normal(mean=args.init_mean, std=torch.ones(
         device=get_device_string(args.device),
         dtype=data_type,
     )*args.init_std)
-if USP:
+if ULSS:
     attn_W_QKV = torch.normal(mean=args.init_mean, std=torch.ones(
             H,
             H,
@@ -703,7 +741,7 @@ attn_WO = torch.normal(mean=args.init_mean, std=torch.ones(
         device=get_device_string(args.device),
         dtype=data_type,
     )*args.init_std)
-if USP:
+if ULSS:
     attn_WO = torch.normal(mean=args.init_mean, std=torch.ones(
             H,
             H,
@@ -717,7 +755,7 @@ mat_h_4h = torch.normal(mean=args.init_mean, std=torch.ones(
         device=get_device_string(args.device),
         dtype=data_type,
     )*args.init_std)
-if USP:
+if ULSS:
     mat_h_4h = torch.normal(mean=args.init_mean, std=torch.ones(
             4*H,
             H,
@@ -731,7 +769,7 @@ mat_4h_h = torch.normal(mean=args.init_mean, std=torch.ones(
         device=get_device_string(args.device),
         dtype=data_type,
     )*args.init_std)
-if USP:
+if ULSS:
     mat_4h_h = torch.normal(mean=args.init_mean, std=torch.ones(
             H,
             4*H,
@@ -766,7 +804,7 @@ if args.torch_ones:
             device=get_device_string(args.device),
             dtype=data_type,
         )*1e-3
-    if USP:
+    if ULSS:
         attn_W_QKV = torch.ones(
                 H,
                 H,
@@ -822,7 +860,7 @@ if args.trace is not None:
                                  input=input, partial_input=partial_input, partial_interim2=partial_interim2, 
                                  partial_interim4=partial_interim4, attn_W_QKV=attn_W_QKV, attn_WO=attn_WO, 
                                  mat_h_4h=mat_h_4h, 
-                                 mat_4h_h=mat_4h_h, allreduce_grad=allreduce_grad, global_context_usp=global_context_usp,
+                                 mat_4h_h=mat_4h_h, allreduce_grad=allreduce_grad, global_context_ulss=global_context_ulss,
                                  warmup=False)
     prof.export_chrome_trace(f"{args.log_directory}/{args.trace}-{rank}-of-{world_size}.json")
 else:
@@ -835,7 +873,7 @@ else:
     result = tensor_parallel(args.iterations, args.number_of_transformer_layers, n_iter_grad_sync, 
                              input=input, partial_input=partial_input, partial_interim2=partial_interim2, 
                              partial_interim4=partial_interim4, attn_W_QKV=attn_W_QKV, attn_WO=attn_WO,
-                             mat_h_4h=mat_h_4h, mat_4h_h=mat_4h_h, allreduce_grad=allreduce_grad,global_context_usp=global_context_usp, 
+                             mat_h_4h=mat_h_4h, mat_4h_h=mat_4h_h, allreduce_grad=allreduce_grad,global_context_ulss=global_context_ulss, 
                              warmup=False)
 
 T_dict_individual = result.T_dict_individual
@@ -846,11 +884,11 @@ interim3 = result.interim3
 interim2 = result.interim2
 interim1 = result.interim1
 allreduce_grad_after = result.allreduce_grad
-usp_interim4 = result.usp_interim4
-usp_interim3 = result.usp_interim3
-usp_interim2 = result.usp_interim2
-usp_interim1 = result.usp_interim1
-logging.info(f"USP_interim_1 Shape from results = {result.usp_interim1.shape}")
+ulss_interim4 = result.ulss_interim4
+ulss_interim3 = result.ulss_interim3
+ulss_interim2 = result.ulss_interim2
+ulss_interim1 = result.ulss_interim1
+logging.info(f"ulss_interim_1 Shape from results = {result.ulss_interim1.shape}")
 
 
 #tp_allreduce_data_volume = (args.sequence_length * args.hidden_dimension * data_type_multiplier)
@@ -860,7 +898,7 @@ tp_allreduce_1_data_volume = (interim2.shape[0] * interim2.shape[-1] * data_type
 tp_allreduce_2_data_volume = (interim4.shape[0] * interim4.shape[-1] * data_type_multiplier)
 
 sp_allgather_data_volume = ((TP - 1) * (args.sequence_length // TP) * args.hidden_dimension * data_type_multiplier)
-usp_all2all_data_volume = ((TP - 1) * args.sequence_length * (args.hidden_dimension // TP) * data_type_multiplier) 
+ulss_all2all_data_volume = ((TP - 1) * args.sequence_length * (args.hidden_dimension // TP) * data_type_multiplier) 
 
 def format_logging_timings(text, data, key, time_multiplier=1.0):
     """
@@ -905,17 +943,17 @@ logging.info(f"Number of transformer layers = {args.number_of_transformer_layers
 logging.info(f"Precision Type = {args.precision}")
 logging.info(f"SP Value = {SP}")
 logging.info(f"TP Degree = {TP}") 
-logging.info(f"USP Value = {USP}")
+logging.info(f"ULSS Value = {ULSS}")
 logging.info("==== List of Arguments ====")
 logging.info("Input mean before operations = {input_mean:4f}".format(input_mean=input.mean()))
 logging.info("Result mean after all  operations = {output_mean:4f}".format(output_mean=interim4.mean()))
-if USP:
+if ULSS:
     logging.info(f"Shape of the (Q,K,V) atten. matrix = {attn_W_QKV.shape}")
     logging.info(f"Shape of the WO atten. matrix = {attn_WO.shape}")
     logging.info(f"Shape of the Weight matrix (H --> 4H)= {mat_h_4h.shape}")
     logging.info(f"Shape of the Weight matrix (4H --> H)= {mat_4h_h.shape}")
-    logging.info(f"Interim 2 Size = {usp_interim2.shape}")
-    logging.info(f"Interim 4 Size = {usp_interim4.shape}")
+    logging.info(f"Interim 2 Size = {ulss_interim2.shape}")
+    logging.info(f"Interim 4 Size = {ulss_interim4.shape}")
 else:
     logging.info(f"Shape of the (Q,K,V) atten. matrix = {attn_W_QKV.shape}")
     logging.info(f"Shape of the WO atten. matrix = {attn_WO.shape}")
@@ -929,12 +967,12 @@ logging.info(f"Allgather buffer size = {(args.sequence_length * args.hidden_dime
 logging.info(f"Grad Sync Allreduce bucket size = {(highest_bucket_size * data_type_multiplier) / 8 / 1e6} MB") 
 logging.info(f"Maximum DP Allreduce Throughput = {((((highest_bucket_size * data_type_multiplier) / 8) / (np.min(T_grad_sync_individual))) * 1e3) / 1.0} MB/s")
 logging.info(f"Minimum DP Allreduce Throughput = {((((highest_bucket_size * data_type_multiplier) / 8) / (np.max(T_grad_sync_individual))) * 1e3) / 1.0} MB/s")
-if USP:
-    logging.info(f"USP All2All data volume per layer per iteration = {(usp_all2all_data_volume ) / 8 / 1e6} MB")
-    logging.info(f"USP All2All 1 Max. Throughput per layer per iteration = {((usp_all2all_data_volume / 8 ) / np.min(T_dict_individual['T_all2all_1'])) * 1e3} MB/s")
-    logging.info(f"USP All2All 2 Max. Throughput per layer per iteration = {((usp_all2all_data_volume / 8 ) / np.min(T_dict_individual['T_all2all_2'])) * 1e3} MB/s")
-    logging.info(f"USP All2All 1 Min. Throughput per layer per iteration = {((usp_all2all_data_volume / 8 ) / np.max(T_dict_individual['T_all2all_1'])) * 1e3} MB/s")
-    logging.info(f"USP All2All 2 Min. Throughput per layer per iteration = {((usp_all2all_data_volume / 8 ) / np.max(T_dict_individual['T_all2all_2'])) * 1e3} MB/s")
+if ULSS:
+    logging.info(f"ULSS All2All data volume per layer per iteration = {(ulss_all2all_data_volume ) / 8 / 1e6} MB")
+    logging.info(f"ULSS All2All 1 Max. Throughput per layer per iteration = {((ulss_all2all_data_volume / 8 ) / np.min(T_dict_individual['T_all2all_1'])) * 1e3} MB/s")
+    logging.info(f"ULSS All2All 2 Max. Throughput per layer per iteration = {((ulss_all2all_data_volume / 8 ) / np.min(T_dict_individual['T_all2all_2'])) * 1e3} MB/s")
+    logging.info(f"ULSS All2All 1 Min. Throughput per layer per iteration = {((ulss_all2all_data_volume / 8 ) / np.max(T_dict_individual['T_all2all_1'])) * 1e3} MB/s")
+    logging.info(f"ULSS All2All 2 Min. Throughput per layer per iteration = {((ulss_all2all_data_volume / 8 ) / np.max(T_dict_individual['T_all2all_2'])) * 1e3} MB/s")
 else: 
     if SP:
         logging.info(f"SP Allgather data volume per layer per iteration = {(sp_allgather_data_volume ) / 8 / 1e6} MB")
@@ -1034,12 +1072,12 @@ logging.info(f"Total time taken for {args.iterations} timing loops = {sum(T_dict
 """
 ###################
 logging.info("\n==== Timings per transformer layer ====")
-format_logging_timings("First All2All for USP", T_dict_individual, 'T_all2all_1', 1e6)
-format_logging_timings("Second All2All for USP", T_dict_individual, 'T_all2all_2', 1e6)
-format_logging_timings("USP Attention Matrix W_QKV multiplication", T_dict_individual, 'T_USP_QKV', 1e6)
-format_logging_timings("USP Attention Matrix WO multiplication", T_dict_individual, 'T_USP_WO', 1e6)
-format_logging_timings("USP H --> 4H Matrix multiplication", T_dict_individual, 'T_USP_H_4H', 1e6)
-format_logging_timings("USP 4H --> H Matrix multiplication", T_dict_individual, 'T_USP_4H_H', 1e6)
+format_logging_timings("First All2All for ULSS", T_dict_individual, 'T_all2all_1', 1e6)
+format_logging_timings("Second All2All for ULSS", T_dict_individual, 'T_all2all_2', 1e6)
+format_logging_timings("ULSS Attention Matrix W_QKV multiplication", T_dict_individual, 'T_ulss_QKV', 1e6)
+format_logging_timings("ULSS Attention Matrix WO multiplication", T_dict_individual, 'T_ulss_WO', 1e6)
+format_logging_timings("ULSS H --> 4H Matrix multiplication", T_dict_individual, 'T_ulss_H_4H', 1e6)
+format_logging_timings("ULSS 4H --> H Matrix multiplication", T_dict_individual, 'T_ulss_4H_H', 1e6)
 format_logging_timings("First Allgather for SP", T_dict_individual, 'T_allgather_1', 1e6)
 format_logging_timings("Column Parallel Attention Matrix W_QKV multiplication", T_dict_individual, 'T_QKV', 1e6)
 format_logging_timings("Row Parallel Attention Matrix WO multiplication", T_dict_individual, 'T_WO', 1e6)
@@ -1053,12 +1091,12 @@ format_logging_timings("Second Allreduce for TP", T_dict_individual, 'T_allreduc
 format_logging_timings("Grad Sync Allreduce over DP groups", T_grad_sync_individual, None, 1e6)
 ###################
 logging.info("\n==== Total Times for all transformer layers ====")
-format_logging_timings("First All2All for USP", T_dict_total, 'T_all2all_1')
-format_logging_timings("Second All2All for USP", T_dict_total, 'T_all2all_2')
-format_logging_timings("USP Attention Matrix W_QKV multiplication", T_dict_total, 'T_USP_QKV')
-format_logging_timings("USP Attention Matrix WO multiplication", T_dict_total, 'T_USP_WO')
-format_logging_timings("USP H --> 4H Matrix multiplication", T_dict_total, 'T_USP_H_4H')
-format_logging_timings("USP 4H --> H Matrix multiplication", T_dict_total, 'T_USP_4H_H')
+format_logging_timings("First All2All for ULSS", T_dict_total, 'T_all2all_1')
+format_logging_timings("Second All2All for ULSS", T_dict_total, 'T_all2all_2')
+format_logging_timings("ULSS Attention Matrix W_QKV multiplication", T_dict_total, 'T_ulss_QKV')
+format_logging_timings("ULSS Attention Matrix WO multiplication", T_dict_total, 'T_ulss_WO')
+format_logging_timings("ULSS H --> 4H Matrix multiplication", T_dict_total, 'T_ulss_H_4H')
+format_logging_timings("ULSS 4H --> H Matrix multiplication", T_dict_total, 'T_ulss_4H_H')
 format_logging_timings("First Allgather for SP", T_dict_total, 'T_allgather_1')
 format_logging_timings("Column Parallel Attention Matrix W_QKV multiplication", T_dict_total, 'T_QKV')
 format_logging_timings("Row Parallel Attention Matrix WO multiplication", T_dict_total, 'T_WO')
@@ -1075,10 +1113,10 @@ format_logging_timings("Grad Sync Allreduce over DP groups", T_dict_total, 'T_gr
 logging.info("\n==== ALL RESULTS ====")
 logging.info(f"First All2All total times from timing loop = {T_dict_total['T_all2all_1']} ms")
 logging.info(f"Second All2All total times from timing loop = {T_dict_total['T_all2all_2']} ms")
-logging.info(f"USP Attention W_QKV matrix multiplication total times from timing loop = {T_dict_total['T_USP_QKV']} ms")
-logging.info(f"USP Attention WO matrix multiplication total times from timing loop = {T_dict_total['T_USP_WO']} ms")
-logging.info(f"USP Weight matrix (H --> 4H) multiplication total times from timing loop = {T_dict_total['T_USP_H_4H']} ms")
-logging.info(f"USP Weight matrix (4H --> H) multiplication total times from timing loop = {T_dict_total['T_USP_4H_H']} ms")
+logging.info(f"ULSS Attention W_QKV matrix multiplication total times from timing loop = {T_dict_total['T_ulss_QKV']} ms")
+logging.info(f"ULSS Attention WO matrix multiplication total times from timing loop = {T_dict_total['T_ulss_WO']} ms")
+logging.info(f"ULSS Weight matrix (H --> 4H) multiplication total times from timing loop = {T_dict_total['T_ulss_H_4H']} ms")
+logging.info(f"ULSS Weight matrix (4H --> H) multiplication total times from timing loop = {T_dict_total['T_ulss_4H_H']} ms")
 #
 logging.info(f"First allgather total times from timing loop = {T_dict_total['T_allgather_1']} ms")
 logging.info(f"First reduce scatter total times from timing loop = {T_dict_total['T_reduce_scatter_1']} ms")
@@ -1092,18 +1130,18 @@ logging.info(f"Second reduce scatter total times from timing loop = {T_dict_tota
 logging.info(f"Second allreduce total times from timing loop = {T_dict_total['T_allreduce_2']} ms")
 logging.info(f"Grad Sync Total times from timing loop = {T_dict_total['T_grad_sync']} ms")
 logging.info(f"TP Sync times from timing loop = {T_dict_total['T_tp_sync']} ms")
-logging.info(f"USP Sync times from timing loop = {T_dict_total['T_usp_sync']} ms")
+logging.info(f"ULSS Sync times from timing loop = {T_dict_total['T_ulss_sync']} ms")
 logging.info(f"DP Sync Barrier at the beginning times from timing loop = {T_dict_total['T_dp_sync_begin']} ms")
 logging.info(f"DP Sync Barrier at the end times from timing loop = {T_dict_total['T_dp_sync_end']} ms")
 logging.info(f"Timing loop times = {T_dict_total['T_timing_loop']}")
 logging.info(f"Total time taken for {args.iterations} timing loops = {sum(T_dict_total['T_timing_loop'])} ms")
 ###################
 logging.info("\n==== TFLOPS per transformer layer ====")
-if USP:
-    format_logging_flops("USP Attention Matrix W_QKV multiplication", input.shape, attn_W_QKV.t().shape, n_layers, T_dict_total, 'T_USP_QKV')
-    format_logging_flops("USP Attention Matrix WO multiplication", usp_interim1.shape, attn_WO.t().shape, n_layers, T_dict_total, 'T_USP_WO')
-    format_logging_flops("USP H --> 4H Matrix multiplication", usp_interim2.shape, mat_h_4h.t().shape, n_layers, T_dict_total, 'T_USP_H_4H')
-    format_logging_flops("USP 4H --> H Matrix multiplication", usp_interim3.shape, mat_4h_h.t().shape, n_layers, T_dict_total, 'T_USP_4H_H')
+if ULSS:
+    format_logging_flops("ULSS Attention Matrix W_QKV multiplication", input.shape, attn_W_QKV.t().shape, n_layers, T_dict_total, 'T_ulss_QKV')
+    format_logging_flops("ULSS Attention Matrix WO multiplication", ulss_interim1.shape, attn_WO.t().shape, n_layers, T_dict_total, 'T_ulss_WO')
+    format_logging_flops("ULSS H --> 4H Matrix multiplication", ulss_interim2.shape, mat_h_4h.t().shape, n_layers, T_dict_total, 'T_ulss_H_4H')
+    format_logging_flops("ULSS 4H --> H Matrix multiplication", ulss_interim3.shape, mat_4h_h.t().shape, n_layers, T_dict_total, 'T_ulss_4H_H')
 else:
     format_logging_flops("Column Parallel Attention Matrix W_QKV multiplication", input.shape, attn_W_QKV.t().shape, n_layers, T_dict_total, 'T_QKV')
     format_logging_flops("Row Parallel Attention Matrix WO multiplication", interim1.shape, attn_WO.t().shape, n_layers, T_dict_total, 'T_WO')

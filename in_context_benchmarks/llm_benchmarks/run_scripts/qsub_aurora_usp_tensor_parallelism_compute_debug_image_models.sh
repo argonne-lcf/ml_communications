@@ -40,7 +40,7 @@ N_LAYERS=1
 IN_TYPE="random"
 #IN_TYPE="torch_ones"
 BUCKET=1e9
-TRIAL=1
+TRIAL=4
 
 # MPI and OpenMP settings
 NNODES=`wc -l < $PBS_NODEFILE`
@@ -121,9 +121,14 @@ echo "========= CCL VARIABLES =============="
 ## RUN ID for PPN=8, NIC balanced case
 #RUN_ID=aurora_tensor_parallel_CB08162452606876_ZE01236789_SEQ${SEQ}_HID${HID}_TP${TP_DEGREE}_NO_SP_L${N_LAYERS}_TL${TIMING_LOOPS}_${PRECISION}_${IN_TYPE}_ELEM_${BUCKET}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
 
-## RUN ID for R12 setup, Regular, NIC imbalanced case
+## RUN ID for ULSS R12 setup, Regular, NIC imbalanced case
 RUN_ID=aurora_tensor_parallel_SEQ${SEQ}_HID${HID}_TP${TP_DEGREE}_USP_L${N_LAYERS}_TL${TIMING_LOOPS}_${PRECISION}_${IN_TYPE}_ELEM_${BUCKET}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
 
+## RUN ID for JUST TP R12 setup, Regular, NIC imbalanced case
+#RUN_ID=aurora_tensor_parallel_SEQ${SEQ}_HID${HID}_TP${TP_DEGREE}_NO_SP_NO_USP_L${N_LAYERS}_TL${TIMING_LOOPS}_${PRECISION}_${IN_TYPE}_ELEM_${BUCKET}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
+
+## RUN ID for JUST SP R12 setup, Regular, NIC imbalanced case
+#RUN_ID=aurora_tensor_parallel_SEQ${SEQ}_HID${HID}_TP${TP_DEGREE}_SP_NO_USP_L${N_LAYERS}_TL${TIMING_LOOPS}_${PRECISION}_${IN_TYPE}_ELEM_${BUCKET}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
 
 echo "${RUN_ID}"
 
@@ -133,7 +138,7 @@ echo "$(timestamp): Before mpiexec."
 mpiexec --pmi=pmix -n ${NRANKS} -ppn ${NRANKS_PER_NODE} -l --line-buffer --cpu-bind ${CPU_AFFINITY} --mem-bind ${MEM_BIND} \
 ${LOG_WRAPPER} python ${WORK_DIR}/tensor_parallel_with_gradient_synchronization_a2a_debug.py -dvc "xpu" \
 -tp_degree=${TP_DEGREE}  --sequence_length=${SEQ} --hidden_dimension=${HID} --barrier --iterations=${TIMING_LOOPS} --precision ${PRECISION} -n_layers ${N_LAYERS} \
--bucket ${BUCKET} -usp_switch \
+-bucket ${BUCKET} -ulysses_enable \
 --logging --log_directory=${WORK_DIR}/run_scripts/outdir_aurora/logs/usp_scratch --log_file=${RUN_ID}.log
 
 echo "$(timestamp): Finished the workload."
