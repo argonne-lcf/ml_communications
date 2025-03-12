@@ -40,7 +40,7 @@ N_LAYERS=1
 IN_TYPE="random"
 #IN_TYPE="torch_ones"
 BUCKET=1e9
-TRIAL=4
+TRIAL=10
 
 # MPI and OpenMP settings
 NNODES=`wc -l < $PBS_NODEFILE`
