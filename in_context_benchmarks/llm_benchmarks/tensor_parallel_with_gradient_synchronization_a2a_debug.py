@@ -169,6 +169,7 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
             if ULSS:
                 start = time.perf_counter_ns()
                 ulss_interim1 = torch.matmul(partial_input, attn_W_QKV.t())
+                print(f"ulss_interim1 shape = {ulss_interim1.shape}")
                 #logging.info(f"Partial Input for ULSS = {partial_input.shape}")
                 synchronize(args.device)
                 end = time.perf_counter_ns()
@@ -180,23 +181,30 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
                     t_ulss_qkv += (end-start)
                 start = time.perf_counter_ns()
                 torch.distributed.all_to_all_single(
-                    global_context_ulss.reshape([S, M, H//TP]), ulss_interim1, 
+                    global_context_ulss, input_ulss, 
                     group=tp_group)
                 synchronize(args.device)
                 end = time.perf_counter_ns()
+                print(f"global_context_ulss shape after 1st a2a = {global_context_ulss.shape}", flush=True)
+                logging.info(f"global_context_ulss shape after 1st a2a = {global_context_ulss.shape}")
                 if warmup:
                     T_dict_individual["T_all2all_1"][m][i] = 0.0
                     t_a2a_1 = 0.0
                 else:
                     T_dict_individual["T_all2all_1"][m][i] = (end - start)
                     t_a2a_1 += (end - start)
+                ## First re-shape to prep for 2nd all_to_all
+                ulss_interim1 = ulss_interim1.reshape([S, M, H//TP])
                 start = time.perf_counter_ns()
                 torch.distributed.all_to_all_single(
-                    ulss_interim1.reshape([S//TP, M, H]), global_context_ulss,
+                    ulss_interim1, global_context_ulss,
                     group=tp_group)
                 synchronize(args.device)
                 end=time.perf_counter_ns()
-                #logging.info(f"ulss_interim1_shape = {ulss_interim1.shape}")
+                print(f"ulss_interim1_shape after 2nd a2a = {ulss_interim1.shape}", flush=True)
+                logging.info(f"ulss_interim1_shape after 2nd a2a = {ulss_interim1.shape}")
+                ## Second re-shape after 2nd all_to_all, prep for matmul
+                ulss_interim1 = ulss_interim1.reshape([S//TP, M, H])
                 #logging.info(f"length of ulss_interim1_shape = {len(ulss_interim1.shape)}")
                 if warmup:
                     T_dict_individual["T_all2all_2"][m][i] = 0.0
@@ -687,8 +695,8 @@ else:
 1,13,25,37
 ...
 """
-S = args.sequence_length #4608 #4608 sequence length
-H = args.hidden_dimension #9216 #9216 hidden dimension
+S = int(args.sequence_length) #4608 #4608 sequence length
+H = int(args.hidden_dimension) #9216 #9216 hidden dimension
 M = 1
 all_gather_buffer = torch.zeros([S, M, H], dtype=data_type, device=get_device_string(args.device))
 SP=args.sequence_parallel_switch
@@ -702,9 +710,12 @@ if ULSS:
 partial_input = torch.normal(mean=args.init_mean, std=torch.ones([S//TP, M, H], dtype=data_type, device=get_device_string(args.device))*args.init_std)
 #logging.info(f"Partial input at the Initialization phase = {partial_input.shape}")
 input = torch.normal(mean=args.init_mean, std=torch.ones([S, M, H], dtype=data_type, device=get_device_string(args.device))*args.init_std)
+input_ulss = torch.normal(mean=args.init_mean, std=torch.ones([S, M, H//TP], dtype=data_type, device=get_device_string(args.device))*args.init_std)
+
 if args.torch_ones:
     partial_input = torch.ones([S//TP, M, H], dtype=data_type, device=get_device_string(args.device))
     input = torch.ones([S, M, H], dtype=data_type, device=get_device_string(args.device))
+    input_ulss = torch.ones([S, M, H//TP], dtype=data_type, device=get_device_string(args.device))
 partial_interim2 = torch.zeros([S//TP, M, H], dtype=data_type, device=get_device_string(args.device))
 partial_interim4 = torch.zeros([S//TP, M, H], dtype=data_type, device=get_device_string(args.device))
 
