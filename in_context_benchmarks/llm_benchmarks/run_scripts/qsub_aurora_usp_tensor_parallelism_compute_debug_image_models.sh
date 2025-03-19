@@ -24,12 +24,12 @@ echo "$(timestamp): Start of the Run, after exporting TZ Central"
 WORK_DIR=/home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks
 LOG_WRAPPER=${WORK_DIR}/log_wrapper.sh 
 
-## SEQ=4608, HID=16384, N_LAYERS=126, Llama 405B
+## SEQ=4608, HID=16896, N_LAYERS=126, Llama 405B
 ## SEQ=16896, HID=25872, N_LAYERS=128, Llama 1T+ w/ large sequence length
 #
 TP_DEGREE=12
 SEQ=4608
-HID=9216
+HID=16896
 #WARMUPS=1
 TIMING_LOOPS=4
 PRECISION="bfloat16"
@@ -40,7 +40,7 @@ N_LAYERS=1
 IN_TYPE="random"
 #IN_TYPE="torch_ones"
 BUCKET=1e9
-TRIAL=10
+TRIAL=12
 
 # MPI and OpenMP settings
 NNODES=`wc -l < $PBS_NODEFILE`
