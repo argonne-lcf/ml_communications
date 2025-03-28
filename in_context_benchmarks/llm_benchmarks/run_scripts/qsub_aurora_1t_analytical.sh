@@ -9,7 +9,7 @@
 #PBS -e /home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks/run_scripts/errordir_aurora
 #PBS -o /home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks/run_scripts/outdir_aurora
 #PBS -j oe
-#PBS -N 1T_TP24_R12
+#PBS -N 1T_TP2_R2
 
 ## Timezone US/Central
 export TZ='/usr/share/zoneinfo/US/Central'
@@ -43,10 +43,10 @@ TRIAL=1
 
 #ALGO=direct
 
-TP_DEGREE=24
+TP_DEGREE=2
 # MPI and OpenMP settings
 NNODES=`wc -l < $PBS_NODEFILE`
-NRANKS_PER_NODE=12
+NRANKS_PER_NODE=1
 
 let NRANKS=${NNODES}*${NRANKS_PER_NODE}
 
@@ -61,6 +61,14 @@ module load frameworks/2024.2.1_u1
 #export CCL_WORKER_AFFINITY="3,11"
 #export MEM_BIND="list:2:3"
 #export ZE_AFFINITY_MASK="0,1"
+
+## For TP=2, PPN=1
+## Special case for testing
+export CPU_AFFINITY="list:0-2,4-7,104-111"
+export HOROVOD_THREAD_AFFINITY="4"
+export CCL_WORKER_AFFINITY="3"
+export MEM_BIND="list:2"
+export ZE_AFFINITY_MASK="0"
 
 
 ## For TP=2, PPN=2
@@ -106,11 +114,11 @@ module load frameworks/2024.2.1_u1
 #export ZE_AFFINITY_MASK="0,1,2,3,6,7,8,9"
 
 ## For TP=12, PPN=12
-export CPU_AFFINITY="list:0-2,4-7,104-111:8-10,12-15,112-119:16-18,20-23,120-127:24-26,28-31,128-135:32-34,36-39,136-143:40-42,44-47,144-151:52-54,56-59,156-163:60-62,64-67,164-171:68-70,72-75,172-179:76-78,80-83,180-187:84-86,88-91,188-195:92-94,96-99,196-203"
-export HOROVOD_THREAD_AFFINITY="4,12,20,28,36,44,56,64,72,80,88,96"
-export CCL_WORKER_AFFINITY="3,11,19,27,35,43,55,63,71,79,87,95"
-export MEM_BIND="list:2:2:2:2:2:2:3:3:3:3:3:3"
-export ZE_AFFINITY_MASK="0,1,2,3,4,5,6,7,8,9,10,11"
+#export CPU_AFFINITY="list:0-2,4-7,104-111:8-10,12-15,112-119:16-18,20-23,120-127:24-26,28-31,128-135:32-34,36-39,136-143:40-42,44-47,144-151:52-54,56-59,156-163:60-62,64-67,164-171:68-70,72-75,172-179:76-78,80-83,180-187:84-86,88-91,188-195:92-94,96-99,196-203"
+#export HOROVOD_THREAD_AFFINITY="4,12,20,28,36,44,56,64,72,80,88,96"
+#export CCL_WORKER_AFFINITY="3,11,19,27,35,43,55,63,71,79,87,95"
+#export MEM_BIND="list:2:2:2:2:2:2:3:3:3:3:3:3"
+#export ZE_AFFINITY_MASK="0,1,2,3,4,5,6,7,8,9,10,11"
 
 
 echo "========= ENVIRONMENT VARIABLES ======="
@@ -124,7 +132,7 @@ printenv | grep "CCL"
 echo "========= CCL VARIABLES =============="
 
 ## RUN ID for PPN=2
-#RUN_ID=aurora_tensor_parallel_CB08_ZE01_SEQ${SEQ}_HID${HID}_TP${TP_DEGREE}_NO_SP_NO_USP_L${N_LAYERS}_TL${TIMING_LOOPS}_${PRECISION}_${IN_TYPE}_ELEM_${BUCKET}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
+RUN_ID=aurora_tensor_parallel_CB0_ZE0_SEQ${SEQ}_HID${HID}_TP${TP_DEGREE}_NO_SP_NO_USP_L${N_LAYERS}_TL${TIMING_LOOPS}_${PRECISION}_${IN_TYPE}_ELEM_${BUCKET}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
 
 ## RUN ID for PPN=4
 #RUN_ID=aurora_tensor_parallel_CB081624_ZE0123_SEQ${SEQ}_HID${HID}_TP${TP_DEGREE}_NO_SP_NO_USP_L${N_LAYERS}_TL${TIMING_LOOPS}_${PRECISION}_${IN_TYPE}_ELEM_${BUCKET}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
@@ -139,7 +147,7 @@ echo "========= CCL VARIABLES =============="
 #RUN_ID=aurora_tensor_parallel_SEQ${SEQ}_HID${HID}_TP${TP_DEGREE}_USP_L${N_LAYERS}_TL${TIMING_LOOPS}_${PRECISION}_${IN_TYPE}_ELEM_${BUCKET}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
 
 ## RUN ID for JUST TP R12 setup, Regular, NIC imbalanced case
-RUN_ID=aurora_tensor_parallel_SEQ${SEQ}_HID${HID}_TP${TP_DEGREE}_NO_SP_NO_USP_L${N_LAYERS}_TL${TIMING_LOOPS}_${PRECISION}_${IN_TYPE}_ELEM_${BUCKET}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
+#RUN_ID=aurora_tensor_parallel_SEQ${SEQ}_HID${HID}_TP${TP_DEGREE}_NO_SP_NO_USP_L${N_LAYERS}_TL${TIMING_LOOPS}_${PRECISION}_${IN_TYPE}_ELEM_${BUCKET}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
 
 ## RUN ID for JUST SP R12 setup, Regular, NIC imbalanced case
 #RUN_ID=aurora_tensor_parallel_SEQ${SEQ}_HID${HID}_TP${TP_DEGREE}_SP_NO_USP_L${N_LAYERS}_TL${TIMING_LOOPS}_${PRECISION}_${IN_TYPE}_ELEM_${BUCKET}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
