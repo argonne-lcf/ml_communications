@@ -1,5 +1,5 @@
 #!/bin/bash -x
-#PBS -l select=2
+#PBS -l select=1
 #PBS -l place=scatter
 #PBS -l walltime=00:20:00
 #PBS -q debug-scaling
@@ -46,7 +46,7 @@ TRIAL=1
 TP_DEGREE=2
 # MPI and OpenMP settings
 NNODES=`wc -l < $PBS_NODEFILE`
-NRANKS_PER_NODE=1
+NRANKS_PER_NODE=2
 
 let NRANKS=${NNODES}*${NRANKS_PER_NODE}
 
@@ -56,19 +56,19 @@ module load frameworks/2024.2.1_u1
 
 ## For TP=2, PPN=2
 # Within a GPU, tile-to-tile MDFI
-#export CPU_AFFINITY="list:0-2,4-7,104-111:8-10,12-15,112-119"
-#export HOROVOD_THREAD_AFFINITY="4,12"
-#export CCL_WORKER_AFFINITY="3,11"
-#export MEM_BIND="list:2:3"
-#export ZE_AFFINITY_MASK="0,1"
+export CPU_AFFINITY="list:0-2,4-7,104-111:8-10,12-15,112-119"
+export HOROVOD_THREAD_AFFINITY="4,12"
+export CCL_WORKER_AFFINITY="3,11"
+export MEM_BIND="list:2:3"
+export ZE_AFFINITY_MASK="0,1"
 
 ## For TP=2, PPN=1
 ## Special case for testing
-export CPU_AFFINITY="list:0-2,4-7,104-111"
-export HOROVOD_THREAD_AFFINITY="4"
-export CCL_WORKER_AFFINITY="3"
-export MEM_BIND="list:2"
-export ZE_AFFINITY_MASK="0"
+#export CPU_AFFINITY="list:0-2,4-7,104-111"
+#export HOROVOD_THREAD_AFFINITY="4"
+#export CCL_WORKER_AFFINITY="3"
+#export MEM_BIND="list:2"
+#export ZE_AFFINITY_MASK="0"
 
 
 ## For TP=2, PPN=2
