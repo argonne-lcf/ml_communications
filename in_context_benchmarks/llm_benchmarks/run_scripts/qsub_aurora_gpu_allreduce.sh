@@ -1,5 +1,5 @@
 #!/bin/bash -x
-#PBS -l select=1
+#PBS -l select=16
 #PBS -l place=scatter
 #PBS -l walltime=00:10:00
 #PBS -q debug-scaling
@@ -27,8 +27,8 @@ LOG_WRAPPER=${WORK_DIR}/log_wrapper.sh
 TRIAL=1
 #MSG=1073741824 ## ~1.07 GB per Rank, if 4 ranks
 #MSG=536870912 ## ~2.15 GB per rank
-#MSG=1073741824 ## ~2.15 GB per rank, BF16
-MSG=536870912 ## ~1.07 GB per rank, BF16
+MSG=1073741824 ## ~2.15 GB per rank, BF16
+#MSG=536870912 ## ~1.07 GB per rank, BF16
 #MSG=458752000 ## 875 MB, per rank, BF16
 
 #ALGO=Ring
@@ -111,7 +111,7 @@ echo "========= CCL VARIABLES =============="
 
 
 #RUN_ID=aurora_ALLREDUCE_CB08_ZE01_1GB_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
-RUN_ID=aurora_ALLREDUCE_1GB_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
+RUN_ID=aurora_ALLREDUCE_2GB_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
 
 #LOG_DIR=${WORK_DIR}/run_scripts/outdir/logs 
 
