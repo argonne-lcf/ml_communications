@@ -13,6 +13,8 @@ parser = argparse.ArgumentParser(description="parse input arguments for the gpu 
 parser.add_argument("-dim", "--tensor_dimension_1d",
                         help="The size of the 1d tensor that is distributed accross the ranks per node.",
                         type=int, default=1073741824) ## ~2.15 GB per rank, in BF16
+parser.add_argument("-p", "--precision", help="Data type for the elements of a tensor. float32 and bfloat16 supported.",
+                    type=str, default="bfloat16")
 args = parser.parse_args()
 
 logging.basicConfig(level="INFO")
@@ -26,6 +28,13 @@ def main(tensor_dimension_1d):
     import oneccl_bindings_for_pytorch
     t2 = perf_counter_ns() 
     import_timer = t2 - t1
+
+    if args.precision == "float32":
+        data_type = torch.float32
+        data_type_multiplier = 4 ## 32 Bits = 4 Bytes
+    elif args.precision == "bfloat16":
+        data_type = torch.bfloat16
+        data_type_multiplier = 2 ## 16 Bits = 2 Bytes
 
     MPI.COMM_WORLD.Barrier()
 
@@ -81,7 +90,7 @@ def main(tensor_dimension_1d):
     total_elapsed=0.0
 
     for _ in range(10):
-        x = torch.ones([1, dim_size],dtype=torch.bfloat16).to(device, non_blocking=True)
+        x = torch.ones([1, dim_size],dtype=data_type).to(device, non_blocking=True)
         # print(x)
         t5 = perf_counter_ns() 
         dist.all_reduce(x, op=dist.ReduceOp.SUM)  # Added Extra op
@@ -94,13 +103,14 @@ def main(tensor_dimension_1d):
     if mpi_my_rank == 0:
         logging.info(f"Python Import time = {import_timer / 1000 / 1000 / 1000} s")
         logging.info(f"DDP initialization time = {init_timer / 1000 / 1000 / 1000} s")
-        logging.info(f"Message size = {(dim_size * 2) / 1000 / 1000} MB")
+        logging.info(f"Precision Type: {data_type}")
+        logging.info(f"Message size = {(dim_size * data_type_multiplier) / 1000 / 1000} MB")
         logging.info(f"Total time = {total_elapsed / 1000 / 1000 / 1000} s")
         for idx, e in enumerate(elapsed1):
             if idx==0:
-                logging.info(f"ALLREDUCE {idx} took {e / 1000 / 1000 / 1000} s, Throughput = {((dim_size * 2) / e) * 1000} MB/s")
+                logging.info(f"ALLREDUCE {idx} took {e / 1000 / 1000 / 1000} s, Throughput = {((dim_size * data_type_multiplier) / e) * 1000} MB/s")
             else:
-                logging.info(f"ALLREDUCE {idx} took {e / 1000 / 1000} ms, Throughput = {((dim_size * 2) / e) * 1000} MB/s")
+                logging.info(f"ALLREDUCE {idx} took {e / 1000 / 1000} ms, Throughput = {((dim_size * data_type_multiplier) / e) * 1000} MB/s")
 
 if __name__ == "__main__":    
     main(args.tensor_dimension_1d)
