@@ -1,8 +1,8 @@
 #!/bin/bash -x
-#PBS -l select=1
+#PBS -l select=2
 #PBS -l place=scatter
 #PBS -l walltime=00:20:00
-#PBS -q alcf_kmd_val
+#PBS -q prod
 #PBS -A datascience
 #PBS -l filesystems=home:flare
 #PBS -k doe
@@ -21,8 +21,9 @@ timestamp() {
 
 echo "$(timestamp): Start of the Run, after exporting TZ Central"
 
-WORK_DIR=/home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks
-LOG_WRAPPER=${WORK_DIR}/log_wrapper.sh 
+BENCH_DIR=/home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks
+LOG_WRAPPER=${BENCH_DIR}/log_wrapper.sh
+#ENV_DIR=/home/cchannui/debug1/condaenv/bar
 
 ## SEQ=4608, HID=16896, N_LAYERS=126, Llama 405B
 ## SEQ=16896, HID=25872, N_LAYERS=128, Llama 1T+ w/ large sequence length
@@ -56,11 +57,43 @@ let NRANKS=${NNODES}*${NRANKS_PER_NODE}
 # Intel Agama UMD 1099.12
 # Intel Vtune Sepdk KMD from 2025.0.5
 
-module use /opt/aurora/24.347.0/modulefiles
+#module use /opt/aurora/24.347.0/modulefiles
+#
+#echo "== Starting/Default Moudles =="
+#module -t list
+#echo "== Starting/Default Modules =="
+#module unload mpich/opt/develop-git.6037a7a
+#echo "== After unloading the default MPICH:Moudles =="
+#module -t list
+#echo "== After unloading the default MPICH:Moudles =="
+#module add mpich/opt/4.2.3-intel
+#echo "== After adding an Intel-MPICH:Moudles =="
+#module -t list
+#echo "== After adding an Intel-MPICH:Moudles =="
 module load frameworks
-module restore
+echo "== After loading frameworks:Moudles =="
+module -t list
+echo "== After loading frameworks:Modules =="
+#conda activate ${ENV_DIR}
+## Trying older CCL for debug
+#export CCL_CONFIGURATION_PATH=""
+#export CCL_CONFIGURATION=cpu_gpu_dpcpp
+#export CCL_ROOT="/opt/aurora/24.180.3/updates/oneapi/ccl/2021.13.1_20240808.145507"
+#export LD_LIBRARY_PATH=/opt/aurora/24.180.3/updates/oneapi/ccl/2021.13.1_20240808.145507/lib:$LD_LIBRARY_PATH
+#export CPATH=/opt/aurora/24.180.3/updates/oneapi/ccl/2021.13.1_20240808.145507/include:$CPATH
+#export LIBRARY_PATH=/opt/aurora/24.180.3/updates/oneapi/ccl/2021.13.1_20240808.145507/lib:$LIBRARY_PATH
+#
+#module use /opt/aurora/24.180.3/modulefiles
+#module load frameworks/2024.2.1_u1
 export ZE_FLAT_DEVICE_HIERARCHY=FLAT
+export CCL_KVS_MODE=mpi
+export CCL_KVS_CONNECTION_TIMEOUT=300
 ###### alcf_kmd_val test setup #####
+#
+
+echo "$FI_MR_CACHE_MONITOR"
+export FI_MR_CACHE_MONITOR=userfaultfd
+echo "$FI_MR_CACHE_MONITOR"
 
 #export CCL_ALLREDUCE=${ALGO}
 #export CCL_ALLREDUCE_SCALEOUT=direct
@@ -125,11 +158,19 @@ export ZE_FLAT_DEVICE_HIERARCHY=FLAT
 #export ZE_AFFINITY_MASK="0,1,2,3,6,7,8,9"
 
 ## For TP=12, PPN=12
-export CPU_AFFINITY="list:1-2,4-8,105-112:9-10,12-16,113-120:17-18,20-24,121-128:25-26,28-32,129-136:33-34,36-40,137-144:41-42,44-48,145-152:53-54,56-60,157-164:61-62,64-68,165-172:69-70,72-76,173-180:77-78,80-84,181-188:85-86,88-92,189-196:93-94,96-100,197-204"
+#export CPU_AFFINITY="list:1-2,4-8,105-112:9-10,12-16,113-120:17-18,20-24,121-128:25-26,28-32,129-136:33-34,36-40,137-144:41-42,44-48,145-152:53-54,56-60,157-164:61-62,64-68,165-172:69-70,72-76,173-180:77-78,80-84,181-188:85-86,88-92,189-196:93-94,96-100,197-204"
+#export HOROVOD_THREAD_AFFINITY="4,12,20,28,36,44,56,64,72,80,88,96"
+#export CCL_WORKER_AFFINITY="3,11,19,27,35,43,55,63,71,79,87,95"
+#export MEM_BIND="list:2:2:2:2:2:2:3:3:3:3:3:3"
+#export ZE_AFFINITY_MASK="0,1,2,3,4,5,6,7,8,9,10,11"
+
+## For TP=12, PPN=12, binding just the physical cores
+export CCL_WORKER_AFFINITY=1,9,17,25,33,41,53,61,69,77,85,93
+export CPU_BIND="list:2-8:10-16:18-24:26-32:34-40:42-48:54-60:62-68:70-76:78-84:86-92:94-100"
 export HOROVOD_THREAD_AFFINITY="4,12,20,28,36,44,56,64,72,80,88,96"
-export CCL_WORKER_AFFINITY="3,11,19,27,35,43,55,63,71,79,87,95"
 export MEM_BIND="list:2:2:2:2:2:2:3:3:3:3:3:3"
 export ZE_AFFINITY_MASK="0,1,2,3,4,5,6,7,8,9,10,11"
+
 
 
 echo "========= ENVIRONMENT VARIABLES ======="
@@ -168,10 +209,10 @@ echo "${RUN_ID}"
 
 echo "$(timestamp): Before mpiexec."
 
-mpiexec --pmi=pmix -n ${NRANKS} -ppn ${NRANKS_PER_NODE} -l --line-buffer --cpu-bind ${CPU_AFFINITY} --mem-bind ${MEM_BIND} \
-${LOG_WRAPPER} python ${WORK_DIR}/tensor_parallel_with_gradient_synchronization_a2a_debug.py -dvc "xpu" \
+mpiexec -n ${NRANKS} -ppn ${NRANKS_PER_NODE} -l --line-buffer --cpu-bind ${CPU_AFFINITY} --mem-bind ${MEM_BIND} \
+${LOG_WRAPPER} python ${BENCH_DIR}/tensor_parallel_with_gradient_synchronization_a2a_debug.py -dvc "xpu" \
 -tp_degree=${TP_DEGREE}  --sequence_length=${SEQ} --hidden_dimension=${HID} --barrier --iterations=${TIMING_LOOPS} --precision ${PRECISION} -n_layers ${N_LAYERS} \
 -bucket ${BUCKET} \
---logging --log_directory=${WORK_DIR}/run_scripts/outdir_aurora/logs/alcf_kmd_val_1099p12_2025p0p5/${RUN_ID} --log_file=${RUN_ID}.log
+--logging --log_directory=${BENCH_DIR}/run_scripts/outdir_aurora/logs/alcf_kmd_val_1099p12_2025p0p5/${RUN_ID} --log_file=${RUN_ID}.log
 
 echo "$(timestamp): Finished the workload."
