@@ -1,5 +1,5 @@
 #!/bin/bash -x
-#PBS -l select=2048
+#PBS -l select=1024
 #PBS -l place=scatter
 #PBS -l walltime=00:20:00
 #PBS -q prod
@@ -42,11 +42,14 @@ NRANKS_PER_NODE=12
 
 let NRANKS=${NNODES}*${NRANKS_PER_NODE}
 
-module load frameworks/2024.2.1_u1
+module load frameworks
 
-## Needed at N512xR12
 export CCL_KVS_MODE=mpi
 export CCL_KVS_CONNECTION_TIMEOUT=300
+export FI_MR_CACHE_MONITOR=userfaultfd
+
+## Used at 1024xR12
+export CCL_ALLREDUCE_SCALEOUT=rabenseifner
 
 ## For TP=2, PPN=1
 ## Special case for testing
@@ -99,9 +102,13 @@ export CCL_KVS_CONNECTION_TIMEOUT=300
 #export ZE_AFFINITY_MASK="0,1,2,3,6,7,8,9"
 
 ## For TP=12, PPN=12
-export CPU_AFFINITY="list:0-2,4-7,104-111:8-10,12-15,112-119:16-18,20-23,120-127:24-26,28-31,128-135:32-34,36-39,136-143:40-42,44-47,144-151:52-54,56-59,156-163:60-62,64-67,164-171:68-70,72-75,172-179:76-78,80-83,180-187:84-86,88-91,188-195:92-94,96-99,196-203"
-export HOROVOD_THREAD_AFFINITY="4,12,20,28,36,44,56,64,72,80,88,96"
-export CCL_WORKER_AFFINITY="3,11,19,27,35,43,55,63,71,79,87,95"
+# Using the affinity from the user-guide 
+#export CPU_AFFINITY="list:0-2,4-7,104-111:8-10,12-15,112-119:16-18,20-23,120-127:24-26,28-31,128-135:32-34,36-39,136-143:40-42,44-47,144-151:52-54,56-59,156-163:60-62,64-67,164-171:68-70,72-75,172-179:76-78,80-83,180-187:84-86,88-91,188-195:92-94,96-99,196-203"
+export CPU_AFFINITY="list:4-7:8-11:12-15:16-19:20-23:24-27:56-59:60-63:64-67:68-71:72-75:76-79"
+export CCL_WORKER_AFFINITY="42,43,44,45,46,47,94,95,96,97,98,99"
+export HOROVOD_THREAD_AFFINITY="7,11,15,19,23,27,59,63,67,71,75,79"
+#export HOROVOD_THREAD_AFFINITY="4,12,20,28,36,44,56,64,72,80,88,96"
+#export CCL_WORKER_AFFINITY="3,11,19,27,35,43,55,63,71,79,87,95"
 export MEM_BIND="list:2:2:2:2:2:2:3:3:3:3:3:3"
 export ZE_AFFINITY_MASK="0,1,2,3,4,5,6,7,8,9,10,11"
 
@@ -127,7 +134,7 @@ echo "${RUN_ID}"
 echo "$(timestamp): Before mpiexec."
 
 mpiexec -n ${NRANKS} -ppn ${NRANKS_PER_NODE} -l --line-buffer --cpu-bind ${CPU_AFFINITY} --mem-bind ${MEM_BIND} \
-    python ${WORK_DIR}/gpu_allreduce.py --tensor_dimension_1d=${MSG} --precision=${PRECISION}
+    ${LOG_WRAPPER} python ${WORK_DIR}/gpu_allreduce.py --tensor_dimension_1d=${MSG} --precision=${PRECISION}
 
 echo "$(timestamp): Finished the workload."
 
