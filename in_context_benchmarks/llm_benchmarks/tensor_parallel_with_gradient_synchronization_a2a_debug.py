@@ -92,7 +92,7 @@ warmup=args.warmup_iterations
 
 if args.device == "xpu":
     import intel_extension_for_pytorch as ipex
-    import oneccl_bindings_for_pytorch
+    #import oneccl_bindings_for_pytorch
 
 if args.precision == "float32":
     data_type = torch.float32
@@ -153,7 +153,8 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
         if args.barrier:
             start = time.perf_counter_ns()
             if args.device == "xpu":
-                torch.distributed.barrier(group=tp_group)
+                torch.distributed.barrier(group=tp_group, 
+                                          device_ids=[torch.xpu.current_device()])
                 synchronize(args.device)
             elif args.device == "cuda":
                 torch.distributed.barrier()
@@ -426,7 +427,8 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
             if args.barrier:
                 start = time.perf_counter_ns()
                 if args.device == "xpu":
-                    torch.distributed.barrier(group=dp_group)
+                    torch.distributed.barrier(group=dp_group, 
+                                              device_ids=[torch.xpu.current_device()])
                     synchronize(args.device)
                 elif args.device == "cuda":
                     torch.distributed.barrier()
@@ -451,7 +453,8 @@ def tensor_parallel(N_timing_loop, n_layers, n_iter_grad_sync,
             if args.barrier:
                 start = time.perf_counter_ns()
                 if args.device == "xpu":
-                    torch.distributed.barrier(group=dp_group)
+                    torch.distributed.barrier(group=dp_group, 
+                                              device_ids=[torch.xpu.current_device()])
                     synchronize(args.device)
                 elif args.device == "cuda":
                     torch.distributed.barrier()
@@ -543,7 +546,7 @@ def get_backend(device):
     if device =="cuda":
         return "nccl"
     elif device == "xpu":
-        return "ccl"
+        return "xccl"
     else:
         raise NotImplementedError("This method is not implemented yet.")
         return None
@@ -571,9 +574,12 @@ logging.info(f"rank {rank}/{world_size}")
 #device_count = torch.xpu.device_count()
 #device_count = int(os.environ["NGPU_PER_HOST"])
 
-visible_device = rank % get_device_count(args.device)
-local_rank = visible_device
-set_device(visible_device)
+#visible_device = rank % get_device_count(args.device)
+#local_rank = visible_device
+#set_device(visible_device)
+
+device = torch.device(f"xpu:{int(os.environ['PALS_RANKID']) % int(os.environ['PALS_LOCAL_SIZE'])}")
+torch.xpu.set_device(device.index or 0)
 
 #os.environ['CCL_LOCAL_RANK'] = str(device)
 #os.environ['CCL_LOCAL_SIZE'] = str(device_count)
