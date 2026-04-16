@@ -2,12 +2,12 @@
 #PBS -l select=2
 #PBS -l place=scatter
 #PBS -l walltime=00:20:00
-#PBS -q debug-scaling
+#PBS -q prod
 #PBS -A datascience
 #PBS -l filesystems=home:flare
 #PBS -k doe
-#PBS -e /lus/flare/projects/datasets/softwares/testing/ml_communications/in_context_benchmarks/llm_benchmarks/run_scripts/errordir_aurora
-#PBS -o /lus/flare/projects/datasets/softwares/testing/ml_communications/in_context_benchmarks/llm_benchmarks/run_scripts/outdir_aurora
+#PBS -e /home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks/run_scripts/errordir_aurora
+#PBS -o /home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks/run_scripts/outdir_aurora
 #PBS -j oe
 #PBS -N 1T_TP2_R2
 
@@ -21,7 +21,7 @@ timestamp() {
 
 echo "$(timestamp): Start of the Run, after exporting TZ Central"
 
-BENCH_DIR=/lus/flare/projects/datasets/softwares/testing/ml_communications/in_context_benchmarks/llm_benchmarks
+BENCH_DIR=/home/hossainm/ml_communications/in_context_benchmarks/llm_benchmarks
 LOG_WRAPPER=${BENCH_DIR}/log_wrapper.sh
 #ENV_DIR=/home/cchannui/debug1/condaenv/bar
 
@@ -71,9 +71,9 @@ let NRANKS=${NNODES}*${NRANKS_PER_NODE}
 #module -t list
 #echo "== After adding an Intel-MPICH:Moudles =="
 module load frameworks
-#echo "== After loading frameworks:Moudles =="
-#module -t list
-#echo "== After loading frameworks:Modules =="
+echo "== After loading frameworks:Moudles =="
+module -t list
+echo "== After loading frameworks:Modules =="
 #conda activate ${ENV_DIR}
 ## Trying older CCL for debug
 #export CCL_CONFIGURATION_PATH=""
@@ -86,10 +86,8 @@ module load frameworks
 #module use /opt/aurora/24.180.3/modulefiles
 #module load frameworks/2024.2.1_u1
 export ZE_FLAT_DEVICE_HIERARCHY=FLAT
-export CCL_PROCESS_LAUNCHER=pmix
 export CCL_KVS_MODE=mpi
-export CCL_ATL_TRANSPORT=mpi
-export CCL_ATL_SYNC_COLL=1
+export CCL_KVS_CONNECTION_TIMEOUT=300
 ###### alcf_kmd_val test setup #####
 #
 
@@ -175,9 +173,9 @@ export ZE_AFFINITY_MASK="0,1,2,3,4,5,6,7,8,9,10,11"
 
 
 
-#echo "========= ENVIRONMENT VARIABLES ======="
-#env
-#echo "========= ENVIRONMENT VARIABLES ======="
+echo "========= ENVIRONMENT VARIABLES ======="
+env
+echo "========= ENVIRONMENT VARIABLES ======="
 
 echo ""
 
@@ -198,41 +196,22 @@ echo "========= CCL VARIABLES =============="
 #RUN_ID=aurora_tensor_parallel_CB08162452606876_ZE01236789_SEQ${SEQ}_HID${HID}_TP${TP_DEGREE}_NO_SP_L${N_LAYERS}_TL${TIMING_LOOPS}_${PRECISION}_${IN_TYPE}_ELEM_${BUCKET}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
 
 ## RUN ID for ULSS R12 setup, Regular, NIC imbalanced case
-#RUN_ID=aurora_tensor_parallel_SEQ${SEQ}_HID${HID}_TP${TP_DEGREE}_USP_L${N_LAYERS}_TL${TIMING_LOOPS}_${PRECISION}_${IN_TYPE}_ELEM_${BUCKET}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
-#echo "RUN ID: ${RUN_ID}"
+RUN_ID=aurora_tensor_parallel_SEQ${SEQ}_HID${HID}_TP${TP_DEGREE}_USP_L${N_LAYERS}_TL${TIMING_LOOPS}_${PRECISION}_${IN_TYPE}_ELEM_${BUCKET}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
 
 ## RUN ID for JUST TP R12 setup, Regular, NIC imbalanced case
-RUN_ID=aurora_tensor_parallel_SEQ${SEQ}_HID${HID}_TP${TP_DEGREE}_NO_SP_NO_USP_L${N_LAYERS}_TL${TIMING_LOOPS}_${PRECISION}_${IN_TYPE}_ELEM_${BUCKET}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
+#RUN_ID=aurora_tensor_parallel_SEQ${SEQ}_HID${HID}_TP${TP_DEGREE}_NO_SP_NO_USP_L${N_LAYERS}_TL${TIMING_LOOPS}_${PRECISION}_${IN_TYPE}_ELEM_${BUCKET}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
 
 ## RUN ID for JUST SP R12 setup, Regular, NIC imbalanced case
 #RUN_ID=aurora_tensor_parallel_SEQ${SEQ}_HID${HID}_TP${TP_DEGREE}_SP_NO_USP_L${N_LAYERS}_TL${TIMING_LOOPS}_${PRECISION}_${IN_TYPE}_ELEM_${BUCKET}_N${NNODES}_R${NRANKS_PER_NODE}_T${TRIAL}_$(date +"%Y-%m-%d_%H-%M-%S")
 
 echo "${RUN_ID}"
 
-mkdir -p ${BENCH_DIR}/run_scripts/outdir_aurora/logs/${RUN_ID} 
-touch ${BENCH_DIR}/run_scripts/outdir_aurora/logs/${RUN_ID}/${RUN_ID}.log
-
 
 echo "$(timestamp): Before mpiexec."
 
-## Running Ulysses All-to-All
-#mpiexec -n ${NRANKS} -ppn ${NRANKS_PER_NODE} -l --line-buffer --cpu-bind ${CPU_AFFINITY} --mem-bind ${MEM_BIND} \
-#${LOG_WRAPPER} python ${BENCH_DIR}/tensor_parallel_with_gradient_synchronization_a2a_debug.py -dvc "xpu" \
-#-tp_degree=${TP_DEGREE}  --sequence_length=${SEQ} --hidden_dimension=${HID} --barrier --iterations=${TIMING_LOOPS} --precision ${PRECISION} -n_layers ${N_LAYERS} \
-#-bucket ${BUCKET} -ulysses_enable --logging --log_directory=${BENCH_DIR}/run_scripts/outdir_aurora/logs/${RUN_ID} --log_file=${RUN_ID}.log
-
-## NO USP, NO TP, just SP
-#mpiexec -n ${NRANKS} -ppn ${NRANKS_PER_NODE} -l --line-buffer --cpu-bind ${CPU_AFFINITY} --mem-bind ${MEM_BIND} \
-#${LOG_WRAPPER} python ${BENCH_DIR}/tensor_parallel_with_gradient_synchronization_a2a_debug.py -dvc "xpu" \
-#-tp_degree=${TP_DEGREE}  -sp_switch --sequence_length=${SEQ} --hidden_dimension=${HID} --barrier --iterations=${TIMING_LOOPS} --precision ${PRECISION} -n_layers ${N_LAYERS} \
-#-bucket ${BUCKET} --logging --log_directory=${BENCH_DIR}/run_scripts/outdir_aurora/logs/${RUN_ID} --log_file=${RUN_ID}.log 2>&1 | tee ${BENCH_DIR}/run_scripts/outdir_aurora/logs/${RUN_ID}/${RUN_ID}.log
-
-## NO SP, NO USP, Just TP
 mpiexec -n ${NRANKS} -ppn ${NRANKS_PER_NODE} -l --line-buffer --cpu-bind ${CPU_AFFINITY} --mem-bind ${MEM_BIND} \
 ${LOG_WRAPPER} python ${BENCH_DIR}/tensor_parallel_with_gradient_synchronization_a2a_debug.py -dvc "xpu" \
--tp_degree=${TP_DEGREE} --sequence_length=${SEQ} --hidden_dimension=${HID} --barrier --iterations=${TIMING_LOOPS} --precision ${PRECISION} -n_layers ${N_LAYERS} \
--bucket ${BUCKET} --logging --log_directory=${BENCH_DIR}/run_scripts/outdir_aurora/logs/${RUN_ID} --log_file=${RUN_ID}.log 2>&1 | tee ${BENCH_DIR}/run_scripts/outdir_aurora/logs/${RUN_ID}/${RUN_ID}.log
-
-
+-tp_degree=${TP_DEGREE}  --sequence_length=${SEQ} --hidden_dimension=${HID} --barrier --iterations=${TIMING_LOOPS} --precision ${PRECISION} -n_layers ${N_LAYERS} \
+-bucket ${BUCKET} -ulysses_enable --logging --log_directory=${BENCH_DIR}/run_scripts/outdir_aurora/logs/alcf_kmd_val_1099p12_2025p0p5/${RUN_ID} --log_file=${RUN_ID}.log
 
 echo "$(timestamp): Finished the workload."
